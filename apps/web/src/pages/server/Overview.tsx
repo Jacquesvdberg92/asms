@@ -6,6 +6,7 @@ import { Button, Confirm, CopyButton, Modal, Stat, Badge, Toggle } from '../../c
 import { Icon } from '../../components/Icons';
 import { Help } from '../../components/Tooltip';
 import PendingBar from '../../components/PendingBar';
+import QuickActions from '../../components/QuickActions';
 import { duration, memory, dateTime } from '../../lib/format';
 import type { RconCheck, ServerInstance, ServerRuntime } from '../../lib/types';
 
@@ -196,6 +197,8 @@ export default function Overview({ server, runtime }: { server: ServerInstance; 
           </div>
         </div>
       </div>
+
+      <QuickActions server={server} runtime={runtime} />
 
       <div className="card">
         <div className="card-head">

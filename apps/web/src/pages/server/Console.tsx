@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore, useAction } from '../../lib/store';
 import { api } from '../../lib/api';
-import { Button, Field, Toggle, SearchInput, Callout } from '../../components/ui';
+import { Button, Toggle, SearchInput, Callout } from '../../components/ui';
 import { Icon } from '../../components/Icons';
+import QuickActions from '../../components/QuickActions';
 import type { ServerInstance, ServerRuntime } from '../../lib/types';
 
 const HISTORY_KEY = 'asms.rcon.history';
@@ -234,56 +235,8 @@ export default function ConsolePanel({ server, runtime }: { server: ServerInstan
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-head">
-          <Icon.Bolt />
-          <h3>Quick actions</h3>
-        </div>
-        <div className="card-body stack">
-          <div className="btn-group">
-            {['ListPlayers', 'SaveWorld', 'GetChat', 'GetServerInfo', 'ShowMessageOfTheDay'].map((cmd) => (
-              <Button key={cmd} size="sm" disabled={!rconReady} onClick={() => send(cmd)}>
-                {cmd}
-              </Button>
-            ))}
-          </div>
-          <BroadcastBox serverId={server.id} disabled={!rconReady} />
-        </div>
-      </div>
+      <QuickActions server={server} runtime={runtime} />
     </div>
-  );
-}
-
-function BroadcastBox({ serverId, disabled }: { serverId: string; disabled: boolean }) {
-  const [, run] = useAction();
-  const [message, setMessage] = useState('');
-  return (
-    <Field label="Broadcast to everyone" help="Shows as a large centre-screen message in game.">
-      <div className="input-group">
-        <input
-          className="input"
-          value={message}
-          disabled={disabled}
-          placeholder="Restarting in 10 minutes — find a safe spot!"
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && message.trim()) {
-              void run(() => api.post(`/servers/${serverId}/broadcast`, { message }), 'Broadcast sent');
-              setMessage('');
-            }
-          }}
-        />
-        <Button
-          disabled={disabled || !message.trim()}
-          onClick={() => {
-            void run(() => api.post(`/servers/${serverId}/broadcast`, { message }), 'Broadcast sent');
-            setMessage('');
-          }}
-        >
-          Send
-        </Button>
-      </div>
-    </Field>
   );
 }
 
