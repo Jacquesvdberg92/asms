@@ -21,6 +21,32 @@ interface UpdateResult {
   ok: boolean;
   restartRequired: boolean;
   message: string;
+  restarting?: boolean;
+}
+
+/**
+ * Waits for ASMS to answer again after it has restarted itself, then reloads.
+ *
+ * The page it is running in was served by the process that just went away, so
+ * it has to sit out the gap and come back on its own - otherwise the update
+ * ends on a dead tab and looks like a crash.
+ */
+async function waitForRestart(onTick: (seconds: number) => void): Promise<boolean> {
+  const started = Date.now();
+  // Give the old process a moment to let go of the port before believing an
+  // answer, or the very first poll succeeds against the version being replaced.
+  await new Promise((r) => setTimeout(r, 3000));
+  while (Date.now() - started < 180_000) {
+    try {
+      const res = await fetch('/api/system', { cache: 'no-store' });
+      if (res.ok) return true;
+    } catch {
+      /* still down, which is the expected state for a while */
+    }
+    onTick(Math.round((Date.now() - started) / 1000));
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return false;
 }
 
 /**
@@ -34,6 +60,7 @@ export function AppUpdate() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [done, setDone] = useState<UpdateResult | null>(null);
+  const [waiting, setWaiting] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
@@ -57,11 +84,30 @@ export function AppUpdate() {
   );
 
   const install = useCallback(
+    (restart: boolean) =>
+      void run(async () => {
+        const result = await api.post<UpdateResult>('/system/app-update/apply', { restart });
+        setDone(result);
+        if (result.restarting) {
+          setWaiting('ASMS is restarting…');
+          const back = await waitForRestart((s) => setWaiting(`ASMS is restarting… ${s}s`));
+          if (back) window.location.reload();
+          else setWaiting(null);
+          return;
+        }
+        setStatus(await api.get<UpdateStatus>('/system/app-update'));
+      }),
+    [run],
+  );
+
+  const restartOnly = useCallback(
     () =>
       void run(async () => {
-        const result = await api.post<UpdateResult>('/system/app-update/apply');
-        setDone(result);
-        setStatus(await api.get<UpdateStatus>('/system/app-update'));
+        await api.post<{ how: string }>('/system/restart');
+        setWaiting('ASMS is restarting…');
+        const back = await waitForRestart((s) => setWaiting(`ASMS is restarting… ${s}s`));
+        if (back) window.location.reload();
+        else setWaiting(null);
       }),
     [run],
   );
@@ -101,11 +147,31 @@ export function AppUpdate() {
             </div>
           </div>
           {status?.available && !done?.ok ? (
-            <Button busy={busy} onClick={install}>
-              <Icon.Download /> Install update
+            <div className="btn-group">
+              <Button variant="primary" busy={busy} onClick={() => install(true)}>
+                <Icon.Download /> Update and restart
+              </Button>
+              <Button
+                busy={busy}
+                title="Pull and build now, and restart ASMS yourself later"
+                onClick={() => install(false)}
+              >
+                Update only
+              </Button>
+            </div>
+          ) : status && !status.blocker && !done ? (
+            <Button size="sm" variant="ghost" busy={busy} onClick={restartOnly} title="Restart ASMS. Your ARK servers keep running.">
+              <Icon.Restart size={14} /> Restart ASMS
             </Button>
           ) : null}
         </div>
+
+        {waiting ? (
+          <Callout tone="info" title={waiting}>
+            The page comes back on its own as soon as ASMS answers again. Your ARK servers are untouched — they keep running
+            through this, and ASMS reattaches to them when it returns.
+          </Callout>
+        ) : null}
 
         {status?.blocker ? (
           <Callout tone="warn" title="Cannot update from here">
@@ -140,12 +206,12 @@ export function AppUpdate() {
           </>
         ) : null}
 
-        {done ? (
+        {done && !waiting ? (
           <Callout
             tone={done.ok ? 'ok' : done.restartRequired ? 'warn' : 'danger'}
-            title={done.ok ? 'Updated — restart to finish' : 'Update did not complete'}
+            title={done.ok ? (done.restarting ? 'Updated' : 'Updated — restart to finish') : 'Update did not complete'}
           >
-            {done.message} {done.restartRequired ? 'Your ARK servers keep running while ASMS restarts.' : ''}
+            {done.message} {done.restartRequired && !done.restarting ? 'Your ARK servers keep running while ASMS restarts.' : ''}
           </Callout>
         ) : null}
       </div>

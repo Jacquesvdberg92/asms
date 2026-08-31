@@ -24,7 +24,19 @@ Notable changes to ASMS. Dates are the day the change landed.
 - Failure messages name the mods: "a mod would not load" is now "Better Breeding (941697) is only
   half-downloaded". Check mods adds ordered next steps and quotes ARK's own words from its log
 
+### Updating ASMS itself
+- **Update and restart** — pulls, reinstalls, rebuilds and restarts ASMS on its own. The page
+  waits out the gap and reloads itself once ASMS answers again. ARK servers keep running
+  throughout, and ASMS reattaches to them when it comes back
+- **Restart ASMS** on its own, for when you just want a clean restart
+- **Update only** is still there for anyone who would rather choose their own moment
+
 ### Fixed
+- Updating on Windows failed at `npm install` with "spawn EINVAL" — Node will not spawn a `.cmd`
+  shim without a shell — leaving the tree pulled but not built
+- `package-lock.json` was committed with entries no manifest asks for, so `npm install` pruned
+  them and every install looked like a folder with local changes, which the updater refused to
+  touch. It also no longer counts that generated file as your work
 - The launch wrapper split on the letter "s" instead of on whitespace, breaking Proton and Wine
   wrapper paths that contained one
 
