@@ -9,7 +9,7 @@ dashboard — on that PC, on your laptop, or on your phone while you are on the 
 
 No installer, no licence key, no paid tier. It is your machine and your files.
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/Jacquesvdberg92/asms/actions/workflows/ci.yml/badge.svg)](https://github.com/Jacquesvdberg92/asms/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](https://nodejs.org)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Docker-lightgrey.svg)](#running-in-docker)

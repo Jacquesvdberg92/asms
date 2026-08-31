@@ -10,8 +10,8 @@ You need [Node.js](https://nodejs.org) 20 or newer. Nothing else — ASMS delibe
 native dependencies**, so `npm install` never needs a C compiler on a gaming PC.
 
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/Jacquesvdberg92/asms.git
+cd asms
 npm install
 npm run dev
 ```
