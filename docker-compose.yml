@@ -1,0 +1,43 @@
+# docker compose up -d   →   http://localhost:8787
+#
+# The named volumes hold ASMS's own database (asms-data) and the ARK server
+# installs, backups and cluster files (asms-ark). Server installs are ~30 GB
+# each, so point asms-ark at a disk that has room.
+
+services:
+  asms:
+    build: .
+    image: asms:local
+    container_name: asms
+    # Half of an unattended reboot: Docker brings this container back whenever
+    # the daemon starts, unless you stopped it yourself. The other half is per
+    # server - tick "Start with ASMS" under Settings - Starting up, and ASMS
+    # relaunches them as it boots. Docker itself still has to start at boot:
+    # `systemctl enable docker` on Linux, or Docker Desktop's "start when you
+    # sign in" on Windows.
+    restart: unless-stopped
+    ports:
+      - "8787:8787"       # the dashboard
+      - "7777:7777/udp"   # first ARK server - game
+      - "7778:7778/udp"   # ASA also binds game port + 1
+      - "27015:27015/udp" # Steam query
+      # RCON (27020/tcp) is deliberately NOT published: ASMS talks to it from
+      # inside the container, and it should never be reachable from outside.
+    environment:
+      # Set this and ASMS requires a sign-in. Without a password, anyone who
+      # can reach port 8787 controls your servers - always set one when the
+      # container is reachable beyond your own machine.
+      # ASMS_PASSWORD: "change-me"
+      ASMS_ARK_ROOT: /ark
+      # ARK's server binary is a Windows executable. To run it on Linux, mount
+      # a Proton or Wine install and put its command here, for example:
+      # ASMS_LAUNCH_WRAPPER: "/usr/bin/proton run"
+    volumes:
+      - asms-data:/data
+      - asms-ark:/ark
+      # Mount a host folder instead if you already have server files:
+      # - /srv/ark:/ark
+
+volumes:
+  asms-data:
+  asms-ark:

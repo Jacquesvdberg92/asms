@@ -1,0 +1,19 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Everything ASMS writes at runtime: config, logs, pid files, downloaded
+# SteamCMD. This holds your admin and RCON passwords - never commit it.
+data/
+
+*.log
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in ASMS does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Before you paste logs, redact your admin, spectator and RCON
+        passwords** — they appear in some ARK log lines and throughout `data/asms.json`.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I clicked Install update in Settings and…
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ASMS version
+      description: From **Settings → ASMS version**, e.g. `v0.1.0 · a1b2c3d`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it?
+      options:
+        - start.cmd on Windows
+        - npm start on Windows
+        - Docker
+        - npm start on Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: asms-log
+    attributes:
+      label: ASMS log
+      description: The relevant part of `data/logs/asms-<date>.log`. Rendered as a code block.
+      render: text
+
+  - type: textarea
+    id: ark-log
+    attributes:
+      label: ARK log
+      description: >
+        If an ARK server is involved, the relevant lines from
+        `<install>/ShooterGame/Saved/Logs/ShooterGame.log`.
+      render: text

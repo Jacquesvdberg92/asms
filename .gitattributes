@@ -1,0 +1,12 @@
+# Normalise to LF in the repository; Windows checkouts still get CRLF where it
+# matters. Without this, a Windows contributor's first commit rewrites every
+# file and buries the real change.
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
