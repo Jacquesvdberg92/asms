@@ -1,15 +1,38 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, useAction } from '../../lib/store';
 import { api } from '../../lib/api';
 import { Button, Empty, Field, Toggle, Badge, CopyButton, Modal, Callout, SearchInput, ExternalLink } from '../../components/ui';
 import { Icon } from '../../components/Icons';
-import { Help } from '../../components/Tooltip';
+import { Help, Tooltip } from '../../components/Tooltip';
+import PendingBar from '../../components/PendingBar';
 import { formatModList, modLabel, modLink, modSearchLink, parseModList } from '../../lib/mods';
 import { matches } from '../../lib/search';
 import { useUnsavedGuard } from '../../lib/guard';
 import { LibraryPicker } from '../../components/LibraryPicker';
 import { ModSources } from '../../components/ModSources';
-import type { ModDiagnosis, ModEntry, ModReport, ServerInstance, ServerRuntime } from '../../lib/types';
+import { dateTime } from '../../lib/format';
+import type { ModDiagnosis, ModEntry, ModReport, ModStatus, ServerInstance, ServerRuntime } from '../../lib/types';
+
+/**
+ * What each on-disk state means, in the words someone staring at a server that
+ * will not start actually needs. "Half-downloaded" is the one that matters:
+ * ARK looks for the folder, not what is in it, so a download that died leaves
+ * a folder that stops it ever trying again.
+ */
+const MOD_STATE: Record<ModStatus, { tone?: 'ok' | 'warn' | 'bad' | 'info'; label: string; help: string }> = {
+  ok: { tone: 'ok', label: 'On disk', help: 'ARK unpacked this one and there are real files in the folder.' },
+  partial: {
+    tone: 'bad',
+    label: 'Half-downloaded',
+    help: 'The folder exists but nothing usable is in it — a download that died part way, or one ARK left in its .temp staging folder. ARK will not retry on its own: it sees the folder and assumes the mod is there. Force re-download clears it so the next start fetches it properly.',
+  },
+  missing: {
+    tone: 'warn',
+    label: 'Not downloaded',
+    help: 'No folder for this mod at all. Either it has never been fetched, or the download failed outright. Download mods now is the quickest way to find out which.',
+  },
+  unknown: { label: 'Not checked', help: 'ARK has not made a mods folder yet, so there is nothing to compare against.' },
+};
 
 /**
  * A mod list is a load order, not a set: what matters is which mods are on, in
@@ -28,6 +51,27 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
   const [doctor, setDoctor] = useState(false);
   const [find, setFind] = useState('');
   const pasteRef = useRef<HTMLTextAreaElement>(null);
+  const [status, setStatus] = useState<ModDiagnosis | null>(null);
+
+  const state = runtime?.state ?? 'stopped';
+  // ARK holds its mod files open, so anything that touches them waits for the
+  // process to be gone.
+  const idle = state === 'stopped' || state === 'crashed';
+
+  /** What is actually on disk, refreshed whenever that could have changed. */
+  const loadStatus = useCallback(async () => {
+    try {
+      setStatus(await api.get<ModDiagnosis>(`/servers/${server.id}/mods/status`));
+    } catch {
+      setStatus(null); // Not being able to look is not worth a toast.
+    }
+  }, [server.id]);
+
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus, server.updatedAt, state]);
+
+  const onDisk = useMemo(() => new Map((status?.mods ?? []).map((m) => [m.id, m])), [status]);
 
   // Keyed on the saved list's *contents*, not its identity: every store refresh
   // hands over a freshly parsed array, and re-syncing on that alone quietly
@@ -87,6 +131,30 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
       return next;
     });
 
+  /**
+   * The force in "force a download": delete what ARK unpacked so it has no
+   * folder to mistake for a finished mod, and fetches it again next start.
+   */
+  const forceRedownload = (mod: { id: string; name?: string }) =>
+    void run(async () => {
+      const res = await api.post<{ removed: string[] }>(`/servers/${server.id}/mods/${mod.id}/refresh`);
+      await loadStatus();
+      toast(
+        'success',
+        `${modLabel(mod)} will be fetched again`,
+        res.removed.length
+          ? `Cleared ${res.removed.length} folder${res.removed.length === 1 ? '' : 's'}. Press Download mods now, or just start the server.`
+          : 'Nothing of it was on disk, so the next download starts clean anyway.',
+      );
+      return res;
+    });
+
+  const downloadNow = () =>
+    void run(
+      () => api.post(`/servers/${server.id}/mods/download`),
+      'Fetching mods — progress is at the top of this tab',
+    );
+
   const save = async () => {
     const saved = await run(
       () => api.patch(`/servers/${server.id}`, { mods, flags: { ...server.flags, automanagedmods: auto } }),
@@ -109,8 +177,13 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
     onSave: save,
   });
 
+  // Only the saved list is on disk, so unsaved additions have no status yet.
+  const broken = (status?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+
   return (
     <div className="stack">
+      <PendingBar serverId={server.id} runtime={runtime} />
+
       <div className="card">
         <div className="card-head">
           <Icon.Package />
@@ -121,7 +194,30 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
           />
           <Badge>{enabled.length} on</Badge>
           {mods.length !== enabled.length ? <Badge tone="warn">{mods.length - enabled.length} off</Badge> : null}
+          {broken.length ? (
+            <Tooltip
+              title="Not every mod is on disk"
+              body="ARK will refuse to start until each of these is downloaded. The Files column says which, and what state each one is in."
+            >
+              <Badge tone="bad">{broken.length} not downloaded</Badge>
+            </Tooltip>
+          ) : null}
           <div className="spacer" />
+          <Tooltip
+            title="Make ARK download its mods now"
+            body="ASA has no downloader of its own — the server executable is the only thing that can fetch a CurseForge mod. So this starts the server, watches the mods land, and shuts it down again the moment they are all there. It is the same thing a normal start does, without the ten-minute wait before you find out one is missing."
+          >
+            <Button
+              size="sm"
+              variant="primary"
+              busy={busy}
+              disabled={!idle || !enabled.length || dirty}
+              title={dirty ? 'Save the list first' : undefined}
+              onClick={downloadNow}
+            >
+              <Icon.Download size={13} /> Download mods now
+            </Button>
+          </Tooltip>
           <Button size="sm" onClick={() => setPicker(true)}>
             <Icon.Package size={13} /> From library{library.mods.length ? ` (${library.mods.length})` : ''}
           </Button>
@@ -247,6 +343,15 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
                     </th>
                     <th>Mod name — yours to fill in</th>
                     <th style={{ width: 130 }}>Project ID</th>
+                    <th style={{ width: 190 }}>
+                      <span className="row" style={{ gap: 5 }}>
+                        Files
+                        <Help
+                          title="What is actually on disk"
+                          body="Read from the folders ARK unpacked, not from what it says. A mod with no folder never downloaded; a folder with nothing in it is a download that died part way — and ARK will not retry that one on its own."
+                        />
+                      </span>
+                    </th>
                     <th style={{ width: 150 }}>Author</th>
                     <th className="right" style={{ width: 196 }}>
                       Load order
@@ -274,6 +379,14 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
                         <a href={modLink(mod)} target="_blank" rel="noreferrer noopener" title={modLabel(mod)}>
                           {mod.id} &#8599;
                         </a>
+                      </td>
+                      <td>
+                        <ModFiles
+                          report={onDisk.get(mod.id)}
+                          idle={idle}
+                          busy={busy}
+                          onForce={() => forceRedownload(mod)}
+                        />
                       </td>
                       <td>
                         <input
@@ -356,17 +469,33 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
           tone="danger"
           title="The last start failed on a mod"
           action={
-            <Button size="sm" onClick={() => setDoctor(true)}>
-              <Icon.Shield size={13} /> Check mods
-            </Button>
+            <div className="btn-group">
+              <Button size="sm" variant="primary" busy={busy} disabled={!idle || !enabled.length} onClick={downloadNow}>
+                <Icon.Download size={13} /> Download mods now
+              </Button>
+              <Button size="sm" onClick={() => setDoctor(true)}>
+                <Icon.Shield size={13} /> Check mods
+              </Button>
+            </div>
           }
         >
-          ARK will not say which one. Check mods compares this list against the folders ARK actually unpacked, which usually
-          names the culprit in a couple of seconds.
+          {/* ARK's own message names nothing; this one names the mods. */}
+          {runtime.lastError}
         </Callout>
       ) : null}
 
-      {doctor ? <ModDoctor server={server} onClose={() => setDoctor(false)} /> : null}
+      {doctor ? (
+        <ModDoctor
+          server={server}
+          idle={idle}
+          onForce={forceRedownload}
+          onDownload={downloadNow}
+          onClose={() => {
+            setDoctor(false);
+            void loadStatus();
+          }}
+        />
+      ) : null}
       {picker ? (
         <LibraryPicker
           exclude={mods.map((m) => m.id)}
@@ -391,15 +520,89 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
 }
 
 /**
- * ARK's own message names no mod, so this does: it compares the list ASMS asked
- * for against the folders ARK actually unpacked.
+ * One mod's on-disk state, small enough to live in a table cell, with the
+ * button that fixes the two states worth fixing.
  */
-function ModDoctor({ server, onClose }: { server: ServerInstance; onClose: () => void }) {
+function ModFiles({
+  report,
+  idle,
+  busy,
+  onForce,
+}: {
+  report?: ModReport;
+  idle: boolean;
+  busy: boolean;
+  onForce: () => void;
+}) {
+  if (!report) return <span className="tiny faint">save the list to check</span>;
+  const state = MOD_STATE[report.status];
+  const staged = report.status === 'partial' && report.staging;
+  const where = report.folder ? ` ASMS looked in ${report.folder}.` : '';
+  const body = staged
+    ? `ARK extracted this one into its .temp staging folder and never moved it into place — the usual sign of a download that ran out of room or was interrupted. It will not retry on its own.${where}`
+    : state.help + where;
+
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <div className="row" style={{ gap: 6 }}>
+        <Tooltip title={staged ? 'Stuck in .temp' : state.label} body={body}>
+          {/* A mod that is switched off is not a problem, so it is not coloured like one. */}
+          <Badge tone={report.enabled ? state.tone : undefined}>{staged ? 'Stuck in .temp' : state.label}</Badge>
+        </Tooltip>
+        {report.status === 'unknown' ? null : (
+          <Tooltip
+            title="Force a re-download"
+            body={
+              idle
+                ? 'Deletes what ARK unpacked for this mod, so there is no folder left for it to mistake for a finished download, and it fetches the whole thing again on the next start.'
+                : 'Stop the server first — ARK holds its mod files open while it is running.'
+            }
+          >
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!idle || busy}
+              onClick={onForce}
+              aria-label={`Force re-download ${report.name}`}
+            >
+              <Icon.Refresh size={13} />
+            </Button>
+          </Tooltip>
+        )}
+      </div>
+      {report.status === 'ok' ? (
+        <span className="tiny faint">
+          {report.sizeMB} MB{report.fileId ? ` · build ${report.fileId}` : ''}
+          {report.updatedAt ? ` · ${dateTime(report.updatedAt)}` : ''}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * ARK's own message names no mod, so this does: it compares the list ASMS asked
+ * for against the folders ARK actually unpacked, quotes what ARK said about it,
+ * and offers the two things that fix it.
+ */
+function ModDoctor({
+  server,
+  idle,
+  onForce,
+  onDownload,
+  onClose,
+}: {
+  server: ServerInstance;
+  idle: boolean;
+  onForce: (mod: { id: string; name?: string }) => void;
+  onDownload: () => void;
+  onClose: () => void;
+}) {
   const [busy, run] = useAction();
   const [result, setResult] = useState<ModDiagnosis | null>(null);
 
-  useEffect(() => {
-    void run(async () => {
+  const check = useCallback(async () => {
+    await run(async () => {
       const res = await api.post<ModDiagnosis>(`/servers/${server.id}/mods/diagnose`);
       setResult(res);
       return res;
@@ -407,16 +610,62 @@ function ModDoctor({ server, onClose }: { server: ServerInstance; onClose: () =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server.id]);
 
+  useEffect(() => {
+    void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id]);
+
   const mark = (mod: ModReport) => {
     if (!mod.enabled) return { icon: '–', tone: 'var(--text-faint)', text: 'switched off, not requested' };
-    if (mod.downloaded === null) return { icon: '?', tone: 'var(--text-faint)', text: 'no mods folder to check against yet' };
-    return mod.downloaded
-      ? { icon: '✓', tone: 'var(--ok)', text: 'downloaded and present' }
-      : { icon: '✕', tone: 'var(--bad)', text: 'never downloaded' };
+    switch (mod.status) {
+      case 'ok':
+        return {
+          icon: '✓',
+          tone: 'var(--ok)',
+          text: `on disk — ${mod.sizeMB} MB in ${mod.files} file${mod.files === 1 ? '' : 's'}${mod.fileId ? `, build ${mod.fileId}` : ''}`,
+        };
+      case 'partial':
+        return {
+          icon: '!',
+          tone: 'var(--bad)',
+          text: mod.staging
+            ? 'stuck in ARK’s .temp folder — extracted, never moved into place'
+            : 'half-downloaded — the folder is there but nothing is in it',
+        };
+      case 'missing':
+        return { icon: '✕', tone: 'var(--bad)', text: 'never downloaded — no folder for it at all' };
+      default:
+        return { icon: '?', tone: 'var(--text-faint)', text: 'no mods folder to check against yet' };
+    }
   };
 
+  const broken = (result?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+
   return (
-    <Modal title="Check mods" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+    <Modal
+      title="Check mods"
+      wide
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" busy={busy} onClick={() => void check()}>
+            <Icon.Refresh size={13} /> Check again
+          </Button>
+          <div className="spacer" />
+          <Button
+            variant="primary"
+            disabled={!idle || !result?.mods.some((m) => m.enabled)}
+            onClick={() => {
+              onDownload();
+              onClose();
+            }}
+          >
+            <Icon.Download size={13} /> Download mods now
+          </Button>
+          <Button onClick={onClose}>Close</Button>
+        </>
+      }
+    >
       {busy || !result ? (
         <div className="row dim">
           <span className="spinner" /> Comparing your list against what ARK unpacked…
@@ -429,27 +678,80 @@ function ModDoctor({ server, onClose }: { server: ServerInstance; onClose: () =>
               <div>The last start ended with ARK refusing to load a mod.</div>
             </div>
           ) : null}
+
           {result.mods.map((mod) => {
             const state = mark(mod);
+            const fixable = mod.enabled && mod.status !== 'unknown';
             return (
               <div key={mod.id} className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
                 <span className="strong" style={{ color: state.tone, width: 14, flex: 'none' }}>
                   {state.icon}
                 </span>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div className="small strong truncate">{mod.name}</div>
                   <div className="tiny faint">
                     <span className="mono">{mod.id}</span> — {state.text}
                   </div>
                 </div>
+                {fixable ? (
+                  <Button
+                    size="sm"
+                    variant={mod.status === 'ok' ? 'ghost' : 'danger'}
+                    disabled={!idle}
+                    title={idle ? undefined : 'Stop the server first'}
+                    onClick={() => {
+                      onForce(mod);
+                      void check();
+                    }}
+                  >
+                    <Icon.Refresh size={13} /> Force re-download
+                  </Button>
+                ) : null}
               </div>
             );
           })}
+
           <div className="divider" />
           <div className="callout">
             <Icon.Bolt size={15} />
             <div>{result.verdict}</div>
           </div>
+
+          {result.advice.length ? (
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="stat-label">What to try, in this order</span>
+              <ol className="small dim" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+                {result.advice.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+
+          {result.evidence.length ? (
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="stat-label">What ARK said</span>
+              <div className="console" style={{ maxHeight: 150, minHeight: 0, height: 'auto' }}>
+                {result.evidence.map((line, i) => (
+                  <div key={i} className="console-line err">
+                    {line}
+                  </div>
+                ))}
+              </div>
+              <span className="tiny faint">
+                Pulled from the server&rsquo;s own output and ShooterGame.log. “Unable to create a directory” means the install
+                folder is too long, not that the mod is broken.
+              </span>
+            </div>
+          ) : null}
+
+          {broken.length && idle ? (
+            <Callout tone="warn" title={`${broken.length} mod${broken.length === 1 ? '' : 's'} to fetch`}>
+              Force re-download clears what is on disk for a mod; Download mods now makes the server go and get everything that
+              is missing. Doing both, in that order, is the fix for a mod that will not download.
+            </Callout>
+          ) : null}
+
           {result.root ? <div className="tiny faint mono truncate">Checked {result.root}</div> : null}
         </div>
       )}

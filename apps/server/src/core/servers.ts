@@ -339,8 +339,72 @@ export function normaliseMods(input: unknown): ModEntry[] {
 /** ARK's fatal line when -mods= names something it cannot mount. */
 export const MODS_FAILED = /Requested mods failed to load|mods failed to load on server/i;
 
+/**
+ * Lines worth keeping when a mod will not download. ARK buries these in a log
+ * nobody reads, and each names a different cause - a directory Windows refused
+ * to create, a file CurseForge no longer serves, a disk with nothing left. One
+ * quoted line beats any amount of guessing, so they are collected as they go
+ * past and shown with the diagnosis.
+ */
+const MOD_TROUBLE: RegExp[] = [
+  /unable to create a directory/i,
+  /Requested mods failed to load|mods failed to load on server/i,
+  /\bmod\b[^.\n]{0,80}(?:failed|could not be|unable to)[^.\n]{0,80}(?:download|install|extract|load|mount)/i,
+  /(?:download|extract|install)[^.\n]{0,50}\bmod\b[^.\n]{0,80}(?:fail|error)/i,
+  /no space left|not enough space|disk (?:is )?full/i,
+];
+
+export function isModTrouble(line: string): boolean {
+  return MOD_TROUBLE.some((re) => re.test(line));
+}
+
 /** Servers whose last run died because of a mod. */
 const modFailures = new Set<string>();
+
+/** The most recent complaints ARK made about mods, newest last, per server. */
+const modTrouble = new Map<string, string[]>();
+
+function noteModTrouble(id: string, line: string): void {
+  const trimmed = line.trim().replace(/\s+/g, ' ').slice(0, 280);
+  if (!trimmed) return;
+  const kept = modTrouble.get(id) ?? [];
+  // ARK repeats the same complaint once per retry; one copy carries the news.
+  if (kept.includes(trimmed)) return;
+  modTrouble.set(id, [...kept, trimmed].slice(-8));
+}
+
+/**
+ * The same complaints, read out of ARK's own log rather than its stdout.
+ *
+ * Mod download errors often land only in ShooterGame.log, and a server that
+ * failed before ASMS was restarted has no stdout left to search - so the tail
+ * of the log is read on demand as well.
+ */
+function modTroubleFromLog(server: ServerInstance, bytes = 512 * 1024): string[] {
+  const file = ark.serverLog(server.installPath);
+  let text: string;
+  try {
+    const size = fs.statSync(file).size;
+    const length = Math.min(size, bytes);
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, size - length);
+      text = buffer.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return []; // No log yet, or -servergamelog is switched off.
+  }
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!isModTrouble(line)) continue;
+    const trimmed = line.trim().replace(/\s+/g, ' ').slice(0, 280);
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  }
+  return out.slice(-8);
+}
 
 /** CurseForge's project id for ARK: Survival Ascended, used as a folder name. */
 const CURSEFORGE_GAME_ID = '83374';
@@ -357,32 +421,116 @@ const CURSEFORGE_GAME_ID = '83374';
  * Reading only the top level finds `83374` - which looks like a mod id, so the
  * scan stopped there and every real mod came back as "never downloaded".
  */
-export function installedMods(server: ServerInstance): { root: string | null; ids: string[] } {
-  const modIds = (dir: string): string[] => {
+export interface FoundMod {
+  id: string;
+  /** Full path to the folder ARK unpacked it into. */
+  folder: string;
+  /** CurseForge's file id, when the folder name carries one. */
+  fileId: string | null;
+  /** Still in ARK's .temp staging folder — an extraction that never finished. */
+  staging: boolean;
+}
+
+export function installedMods(server: ServerInstance): { root: string | null; ids: string[]; found: FoundMod[] } {
+  const modFolders = (dir: string, staging = false): FoundMod[] => {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       return [];
     }
-    return entries
-      .filter((e) => e.isDirectory())
+    const out: FoundMod[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
       // CurseForge appends _<fileId>, SteamCMD does not; both start with the id.
-      .map((e) => /^(\d{1,12})(?:_\d{1,12})?$/.exec(e.name)?.[1])
-      .filter((id): id is string => Boolean(id));
+      const match = /^(\d{1,12})(?:_(\d{1,12}))?$/.exec(entry.name);
+      if (!match) continue;
+      out.push({ id: match[1], fileId: match[2] ?? null, folder: path.join(dir, entry.name), staging });
+    }
+    return out;
   };
 
+  // A mods folder that exists but is empty still counts as somewhere to look:
+  // "none of them downloaded" is a real answer, and a much more useful one than
+  // "nothing to compare against".
+  let empty: string | null = null;
+
   for (const root of ark.modRoots(server.installPath)) {
-    const top = modIds(root);
+    if (empty === null && fs.existsSync(root)) empty = root;
+    const top = modFolders(root);
     // The game id is a folder, not a mod - descend through it rather than
     // reporting it as one, and keep any sibling ids a mixed install left behind.
-    const ids = top.flatMap((id) =>
-      id === CURSEFORGE_GAME_ID ? modIds(path.join(root, CURSEFORGE_GAME_ID)) : [id],
+    const found = top.flatMap((entry) =>
+      entry.id === CURSEFORGE_GAME_ID
+        ? [
+            ...modFolders(entry.folder),
+            // Anything still under .temp is a download ARK never finished.
+            ...modFolders(path.join(entry.folder, '.temp'), true),
+          ]
+        : [entry],
     );
-    if (ids.length) return { root, ids: [...new Set(ids)] };
+    if (found.length) {
+      // A finished unpack always wins over a .temp leftover of the same mod.
+      const best = new Map<string, FoundMod>();
+      for (const entry of found) {
+        const existing = best.get(entry.id);
+        if (!existing || (existing.staging && !entry.staging)) best.set(entry.id, entry);
+      }
+      return { root, ids: [...best.keys()], found: [...best.values()] };
+    }
   }
-  return { root: null, ids: [] };
+  return { root: empty, ids: [], found: [] };
 }
+
+/**
+ * How much actually landed in a mod folder.
+ *
+ * A folder on its own proves nothing: the failure that started all of this
+ * leaves an empty directory behind, which the old check read as "downloaded"
+ * and cleared the mod of any blame.
+ */
+function measureFolder(dir: string): { bytes: number; files: number; updatedAt: number | null } {
+  let bytes = 0;
+  let files = 0;
+  let updatedAt: number | null = null;
+  const walk = (at: string, depth: number): void => {
+    if (depth > 8 || files > 5000) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(at, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(at, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        try {
+          const stat = fs.statSync(full);
+          bytes += stat.size;
+          files += 1;
+          if (updatedAt === null || stat.mtimeMs > updatedAt) updatedAt = stat.mtimeMs;
+        } catch {
+          /* vanished mid-walk */
+        }
+      }
+      if (files > 5000) return;
+    }
+  };
+  walk(dir, 0);
+  return { bytes, files, updatedAt };
+}
+
+/**
+ * ok        — unpacked, with files in it
+ * partial   — a folder exists but nothing usable is inside, or ARK left it
+ *             half-extracted in .temp. This is what a mod that "downloaded"
+ *             and still broke the server actually looks like on disk.
+ * missing   — no folder at all
+ * unknown   — no mods folder yet, so there is nothing to compare against
+ */
+export type ModStatus = 'ok' | 'partial' | 'missing' | 'unknown';
 
 export interface ModReport {
   id: string;
@@ -390,6 +538,16 @@ export interface ModReport {
   enabled: boolean;
   /** null when ASMS cannot tell — no mods folder exists yet. */
   downloaded: boolean | null;
+  status: ModStatus;
+  /** Half-extracted in ARK’s .temp folder rather than unpacked beside it. */
+  staging: boolean;
+  /** Where ARK unpacked it, when it got that far. */
+  folder: string | null;
+  /** CurseForge's file id, which changes every time the mod updates. */
+  fileId: string | null;
+  sizeMB: number;
+  files: number;
+  updatedAt: number | null;
 }
 
 /**
@@ -402,49 +560,96 @@ export interface ModDiagnosis {
   root: string | null;
   lastRunFailed: boolean;
   verdict: string;
+  /** What to do next, in the order worth trying. */
+  advice: string[];
+  /** ARK's own words about the failure, quoted from stdout and its log. */
+  evidence: string[];
   /** Whether the install folder leaves ARK room to unpack mods at all. */
   pathCheck: InstallPathCheck;
 }
 
 export function diagnoseMods(id: string): ModDiagnosis {
-  return reportMods(need(id), modFailures.has(id));
+  const server = need(id);
+  const evidence = [...(modTrouble.get(id) ?? [])];
+  for (const line of modTroubleFromLog(server)) if (!evidence.includes(line)) evidence.push(line);
+  return reportMods(server, modFailures.has(id), evidence);
 }
 
-export function reportMods(server: ServerInstance, lastRunFailed = false): ModDiagnosis {
-  const { root, ids } = installedMods(server);
-  const known = new Set(ids);
+export function reportMods(server: ServerInstance, lastRunFailed = false, evidence: string[] = []): ModDiagnosis {
+  const { root, found } = installedMods(server);
+  const onDisk = new Map(found.map((entry) => [entry.id, entry]));
   const pathCheck = checkInstallPath(server.installPath);
 
-  const mods: ModReport[] = server.mods.map((mod) => ({
-    id: mod.id,
-    name: mod.name || `Mod ${mod.id}`,
-    enabled: mod.enabled,
-    downloaded: root ? known.has(mod.id) : null,
-  }));
+  const mods: ModReport[] = server.mods.map((mod) => {
+    const entry = onDisk.get(mod.id);
+    const size = entry ? measureFolder(entry.folder) : { bytes: 0, files: 0, updatedAt: null };
+    // An empty folder is not a download. Neither is one still sitting in .temp.
+    const status: ModStatus = !root
+      ? 'unknown'
+      : !entry
+        ? 'missing'
+        : entry.staging || size.bytes === 0
+          ? 'partial'
+          : 'ok';
+    return {
+      id: mod.id,
+      name: mod.name || `Mod ${mod.id}`,
+      enabled: mod.enabled,
+      downloaded: status === 'unknown' ? null : status === 'ok',
+      status,
+      staging: Boolean(entry?.staging),
+      folder: entry?.folder ?? null,
+      fileId: entry?.fileId ?? null,
+      sizeMB: Math.round((size.bytes / 1024 / 1024) * 10) / 10,
+      files: size.files,
+      updatedAt: size.updatedAt,
+    };
+  });
 
   const requested = mods.filter((m) => m.enabled);
-  const missing = requested.filter((m) => m.downloaded === false);
-  const present = requested.filter((m) => m.downloaded === true);
+  const missing = requested.filter((m) => m.status === 'missing');
+  const partial = requested.filter((m) => m.status === 'partial');
+  const present = requested.filter((m) => m.status === 'ok');
+  const broken = [...missing, ...partial];
+  const names = (list: ModReport[]) => list.map((m) => `${m.name} (${m.id})`).join(', ');
+  const advice: string[] = [];
 
   let verdict: string;
   if (!requested.length) {
     verdict = 'No mods are switched on, so a mod cannot be what is stopping this server.';
   } else if (!root) {
     verdict =
-      'ARK has not created a mods folder yet, so there is nothing to compare against. Start the server once and let it download, then check again.';
-  } else if (missing.length && pathCheck.level !== 'ok') {
+      'ARK has not created a mods folder yet, so there is nothing to compare against. Press Download mods now and let it fetch them, then check again.';
+    advice.push('Press Download mods now — it boots the server just far enough to pull every mod down, then shuts it again.');
+  } else if (broken.length && pathCheck.level !== 'ok') {
     // A path this long explains every missing mod at once, so naming individual
     // mods here would send someone off disabling innocent ones.
-    const names = missing.map((m) => `${m.name} (${m.id})`).join(', ');
-    verdict = `${missing.length === 1 ? names + ' has' : missing.length + ' mods have'} not downloaded, and the install folder is the likely reason rather than the mods themselves. ${pathCheck.message} Moving this server to a shorter folder should bring ${missing.length === 1 ? 'it' : 'them'} back.`;
+    verdict = `${broken.length === 1 ? names(broken) + ' has' : broken.length + ' mods have'} not downloaded properly, and the install folder is the likely reason rather than the mods themselves. ${pathCheck.message} Moving this server to a shorter folder should bring ${broken.length === 1 ? 'it' : 'them'} back.`;
+    advice.push(`Move this server to a shorter folder — ${pathCheck.over} character${pathCheck.over === 1 ? '' : 's'} shorter is enough. Backup & migrate does it without losing the saves.`);
+    advice.push('Then press Force re-download on the affected mods so ARK fetches them again on the next start.');
+  } else if (partial.length) {
+    // Which half-download it is matters: one is an empty folder, the other is
+    // an extraction ARK abandoned, and they read very differently on disk.
+    const detail = partial
+      .map(
+        (m) =>
+          `${m.name} (${m.id}) is half-downloaded - ${m.staging ? 'ARK extracted it into its .temp staging folder and never moved it into place' : 'the folder is there with nothing in it'}`,
+      )
+      .join('; ');
+    verdict = `${detail}. ARK sees a folder either way, decides the mod is already there, and never tries again - so this repeats every start until the folder is cleared.${missing.length ? ` ${names(missing)} never downloaded at all.` : ''}`;
+    advice.push(`Press Force re-download on ${partial.length === 1 ? names(partial) : 'each half-downloaded mod'} — it deletes the stale folder so ARK fetches the mod cleanly.`);
+    advice.push('Then Download mods now, and watch it land before you start the server for real.');
   } else if (missing.length) {
-    const names = missing.map((m) => `${m.name} (${m.id})`).join(', ');
     verdict =
       missing.length === 1
-        ? `${names} never downloaded, so it is almost certainly the one ARK is refusing to load. Switch it off to get the server up, then check the mod still exists on CurseForge.`
-        : `These never downloaded: ${names}. Switch them off to get the server up, then add them back one at a time.`;
+        ? `${names(missing)} never downloaded, so it is almost certainly the one ARK is refusing to load.`
+        : `These never downloaded: ${names(missing)}.`;
+    advice.push('Press Download mods now — most of the time a mod that missed one boot arrives on the next attempt.');
+    advice.push(`If it still does not arrive, open the mod on CurseForge: an id that 404s is a mod that was deleted or made private, and no amount of retrying will fetch it.`);
+    advice.push('Switching it off gets the server up in the meantime.');
   } else if (lastRunFailed) {
     verdict = `All ${present.length} mods are downloaded, so the failure is inside one of them rather than a missing file - a mod that does not support this ARK build, or two that conflict. Switch off the half you trust least and start again; the list halves each time.`;
+    advice.push('Check each mod on CurseForge for a build newer than what is on disk — the file id in this list is the one you have.');
   } else {
     verdict = `All ${present.length} enabled mods are downloaded and present.`;
   }
@@ -455,7 +660,247 @@ export function reportMods(server: ServerInstance, lastRunFailed = false): ModDi
     verdict = `${verdict} Worth knowing either way: ${pathCheck.message?.charAt(0).toLowerCase()}${pathCheck.message?.slice(1)}`;
   }
 
-  return { mods, root, lastRunFailed, verdict, pathCheck };
+  return { mods, root, lastRunFailed, verdict, advice, evidence, pathCheck };
+}
+
+/**
+ * What ARK's own refusal should have said.
+ *
+ * "Requested mods failed to load on server" names nothing, so this names the
+ * mods that are actually not on disk and says what state they are in.
+ */
+export function modFailureMessage(server: ServerInstance): string {
+  const diagnosis = reportMods(server, true);
+  const broken = diagnosis.mods.filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+  if (!broken.length) {
+    return 'A mod would not load. Every enabled mod is on disk, so one of them does not match this ARK build, or two of them conflict.';
+  }
+  const named = broken
+    .map((m) => `${m.name} (${m.id}) ${m.status === 'partial' ? 'is only half-downloaded' : 'never downloaded'}`)
+    .join(', ');
+  return `A mod would not load: ${named}. Mods → Check mods has the fix.`;
+}
+
+// --------------------------------------------------------- forcing a download
+
+/**
+ * Delete what ARK unpacked for one mod, so the next boot fetches it again.
+ *
+ * This is the whole trick behind "force a download". ARK decides a mod is
+ * present by looking for its folder, not by looking inside it - so a download
+ * that died half way leaves a folder that stops it ever trying again. Removing
+ * the folder is the only way to change its mind.
+ */
+export function clearModFiles(id: string, modId: string): { removed: string[] } {
+  const server = need(id);
+  if (!/^\d{1,12}$/.test(modId)) throw new Error(`${modId} is not a mod id`);
+  const state = runtime(id).state;
+  if (state !== 'stopped' && state !== 'crashed') {
+    throw new Error(`Stop the server first — ARK holds its mod files open while it is ${state}`);
+  }
+
+  const installRoot = path.resolve(server.installPath);
+  const removed: string[] = [];
+  const remove = (target: string): void => {
+    const full = path.resolve(target);
+    // Never delete outside this server, and never anything but this mod's own
+    // folder: the name must be the id, optionally with CurseForge's file id.
+    if (!full.startsWith(installRoot + path.sep)) return;
+    if (!new RegExp(`^${modId}(?:_\\d{1,12})?$`).test(path.basename(full))) return;
+    if (!fs.existsSync(full)) return;
+    fs.rmSync(full, { recursive: true, force: true });
+    removed.push(full);
+  };
+
+  const siblings = (dir: string): string[] => {
+    try {
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && new RegExp(`^${modId}(?:_\\d{1,12})?$`).test(e.name))
+        .map((e) => path.join(dir, e.name));
+    } catch {
+      return [];
+    }
+  };
+
+  for (const root of ark.modRoots(server.installPath)) {
+    for (const target of siblings(root)) remove(target);
+    const game = path.join(root, CURSEFORGE_GAME_ID);
+    for (const target of siblings(game)) remove(target);
+    for (const target of siblings(path.join(game, '.temp'))) remove(target);
+  }
+
+  if (removed.length) {
+    pushConsole(id, `Cleared ${removed.length} folder${removed.length === 1 ? '' : 's'} for mod ${modId} - ARK will download it again on the next start.`, 'sys');
+  } else {
+    pushConsole(id, `Nothing on disk for mod ${modId} - ARK will download it on the next start.`, 'sys');
+  }
+  return { removed };
+}
+
+/** How long a mod fetch is allowed to run before ASMS gives up on it. */
+const MOD_FETCH_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * Boot the server purely to make it download its mods, then shut it down.
+ *
+ * ASA has no downloader of its own - the server executable is the only thing
+ * that can fetch a CurseForge mod - so the only honest way to "force a
+ * download" is to start it, watch the folders appear, and stop it again the
+ * moment they all have. Which beats the alternative: starting the real server,
+ * waiting ten minutes, and finding out from a crash that one mod is still
+ * missing.
+ */
+export function assertCanDownloadMods(id: string): void {
+  const server = need(id);
+  const state = runtime(id).state;
+  if (state !== 'stopped' && state !== 'crashed') throw new Error(`Server is ${state} - stop it first`);
+  if (!isInstalled(server)) throw new Error('Server files are not installed yet - run Install first');
+  if (!activeModIds(server).length) throw new Error('No mods are switched on, so there is nothing to download');
+}
+
+export async function downloadMods(id: string): Promise<ModDiagnosis> {
+  assertCanDownloadMods(id);
+  const server = need(id);
+  const wanted = activeModIds(server);
+
+  const plan = buildLaunchPlan(server);
+  patchRuntime(id, { state: 'updating', progress: 0, progressText: `0 of ${wanted.length} mods on disk`, lastError: null });
+  pushConsole(id, `--- Fetching ${wanted.length} mod${wanted.length === 1 ? '' : 's'} ---`, 'sys');
+  pushConsole(id, 'The server starts, downloads its mods and is shut down again as soon as they are all on disk.', 'sys');
+  modTrouble.delete(id);
+
+  let settled = false;
+  let cancelled = false;
+  let failedOnMods = false;
+  let child: ChildProcess | undefined;
+
+  const stop = (): void => {
+    const pid = child?.pid;
+    if (!pid) return;
+    void (async () => {
+      await killTree(pid, false).catch(() => {});
+      await sleep(5000);
+      // ARK ignores a polite close when it has no window to close.
+      if (isAlive(pid)) await killTree(pid, true).catch(() => {});
+    })();
+  };
+
+  // Everything from the spawn on lives in the try: a server left saying
+  // "updating" forever because something threw before the handler existed is
+  // worse than the failure that caused it.
+  try {
+    child = spawn(plan.exe, plan.args, { cwd: plan.cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = child;
+    // Recorded like a real start, so an ASMS restart mid-fetch reattaches to
+    // the process instead of leaving it orphaned on the game port.
+    writePid(id, proc.pid ?? 0);
+    beginPending(id, 'install', `Downloading mods for ${server.name}`, () => {
+      cancelled = true;
+      stop();
+    });
+
+    const onChunk = (stream: 'out' | 'err') => (buf: Buffer) => {
+      for (const line of buf.toString('utf8').split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        pushConsole(id, line, stream);
+        if (isModTrouble(line)) noteModTrouble(id, line);
+        if (MODS_FAILED.test(line)) failedOnMods = true;
+      }
+    };
+    proc.stdout?.on('data', onChunk('out'));
+    proc.stderr?.on('data', onChunk('err'));
+
+    await new Promise<void>((resolve, reject) => {
+      let last = -1;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(poll);
+        clearTimeout(timer);
+        fn();
+      };
+
+      const poll = setInterval(() => {
+        const { found } = installedMods(server);
+        const usable = new Set(
+          found.filter((entry) => !entry.staging && measureFolder(entry.folder).bytes > 0).map((entry) => entry.id),
+        );
+        const have = wanted.filter((mod) => usable.has(mod)).length;
+        if (have !== last) {
+          last = have;
+          patchRuntime(id, {
+            progress: Math.round((have / wanted.length) * 100),
+            progressText: `${have} of ${wanted.length} mods on disk`,
+          });
+          if (have) pushConsole(id, `${have} of ${wanted.length} mods downloaded.`, 'sys');
+        }
+        // Every mod is down: no reason to let it finish loading the world.
+        if (have === wanted.length) finish(() => { stop(); resolve(); });
+        // ARK has given up on one of them; nothing more will arrive.
+        else if (failedOnMods) finish(() => { stop(); resolve(); });
+      }, 2000);
+
+      const timer = setTimeout(() => {
+        finish(() => {
+          pushConsole(id, 'Giving up on the mod download after 20 minutes.', 'err');
+          stop();
+          resolve();
+        });
+      }, MOD_FETCH_TIMEOUT_MS);
+
+      proc.on('error', (err) => finish(() => reject(err)));
+      // A server that exits on its own has either finished or fallen over; the
+      // report that follows says which, so this is not an error either way.
+      proc.on('exit', () => finish(resolve));
+    });
+
+    // Measuring folders ARK still has open reads half a mod as a whole one, so
+    // wait for it to actually be gone before believing anything on disk.
+    await new Promise<void>((resolve) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
+      const timer = setTimeout(resolve, 45_000);
+      proc.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    await sleep(1500);
+    clearPid(id);
+    endPending(id);
+    patchRuntime(id, { state: 'stopped', progress: null, progressText: null, pid: null });
+
+    const evidence = [...(modTrouble.get(id) ?? [])];
+    for (const line of modTroubleFromLog(server)) if (!evidence.includes(line)) evidence.push(line);
+    const diagnosis = reportMods(server, failedOnMods, evidence);
+    const broken = diagnosis.mods.filter((m) => m.enabled && m.status !== 'ok');
+
+    if (cancelled) {
+      pushConsole(id, 'Mod download cancelled.', 'sys');
+    } else if (!broken.length) {
+      pushConsole(id, `--- All ${wanted.length} mods are on disk ---`, 'sys');
+      announce('update', 'success', `${server.name}: mods downloaded`, `All ${wanted.length} mods are on disk. The server can start.`);
+    } else {
+      const message = broken.map((m) => `${m.name} (${m.id})`).join(', ');
+      patchRuntime(id, { lastError: `Mods still missing after a download run: ${message}` });
+      pushConsole(id, `--- Still missing: ${message} ---`, 'err');
+      announce('update', 'error', `${server.name}: mods still missing`, `${message}. Mods → Check mods explains why.`);
+    }
+    return diagnosis;
+  } catch (err) {
+    stop();
+    clearPid(id);
+    endPending(id);
+    const raw = err instanceof Error ? err.message : String(err);
+    // "spawn UNKNOWN" is what Windows says when the file it was pointed at is
+    // not a program it can run, which in practice means a broken install.
+    const message = /spawn/i.test(raw)
+      ? `${raw} — Windows would not run ${ark.exe(server.installPath)}. The server files look broken; Verify integrity on the Overview tab repairs that.`
+      : raw;
+    patchRuntime(id, { state: 'stopped', progress: null, progressText: null, lastError: message });
+    pushConsole(id, `Mod download failed: ${message}`, 'err');
+    throw err;
+  }
 }
 
 /** The ids ARK is actually told to load, in order. */
@@ -608,7 +1053,7 @@ export function buildLaunchPlan(server: ServerInstance): LaunchPlan {
   // On Linux (and so in Docker) the ASA binary is a Windows executable, which
   // needs a Proton or Wine wrapper in front of it. Keeping that in settings
   // rather than in code means the launch command stays one visible string.
-  const wrapper = settings().launchWrapper.trim().split(/s+/).filter(Boolean);
+  const wrapper = settings().launchWrapper.trim().split(/\s+/).filter(Boolean);
   const exe = wrapper.length ? wrapper[0] : serverExe;
   const argv = wrapper.length ? [...wrapper.slice(1), serverExe, ...args] : args;
 
@@ -717,6 +1162,7 @@ export async function start(id: string): Promise<void> {
   });
   procs.set(id, child);
   modFailures.delete(id);
+  modTrouble.delete(id);
   patchRuntime(id, { pid: child.pid ?? null, identityStale: false });
   launchedIdentity.set(id, identityOf(server));
   writePid(id, child.pid ?? 0);
@@ -728,9 +1174,11 @@ export async function start(id: string): Promise<void> {
       if (READY_LINE.test(line)) {
         if (runtime(id).state === 'starting') markRunning(id);
       }
+      if (isModTrouble(line)) noteModTrouble(id, line);
       if (MODS_FAILED.test(line)) {
         modFailures.add(id);
-        pushConsole(id, 'ARK refused to start because a mod would not load - see Mods → Check mods.', 'sys');
+        // Name it here rather than making them open a modal to find out.
+        pushConsole(id, modFailureMessage(server), 'err');
       }
     }
   };
@@ -766,13 +1214,9 @@ export async function start(id: string): Promise<void> {
       announce('stop', 'info', `${server.name} stopped`, 'The server shut down cleanly.');
     } else {
       if (modFailures.has(id)) {
-        patchRuntime(id, { lastError: 'A mod would not load - ARK stopped before the world opened.' });
-        announce(
-          'crash',
-          'error',
-          `${server.name}: a mod would not load`,
-          'ARK refused to start. Open the Mods tab and press Check mods - it names the ones that never downloaded.',
-        );
+        const message = modFailureMessage(server);
+        patchRuntime(id, { lastError: message });
+        announce('crash', 'error', `${server.name}: a mod would not load`, message);
       } else {
         announce('crash', 'error', `${server.name} crashed`, `Exit code ${code}. ${server.autoRestartOnCrash ? 'Auto-restart is armed.' : ''}`);
       }

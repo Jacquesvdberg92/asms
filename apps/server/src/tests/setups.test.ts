@@ -7,7 +7,7 @@ import { PRESETS, getPreset, resolve, resolveById } from '../core/presets.js';
 import { SETTINGS } from '../core/catalog.js';
 import { readCurated, writeCurated, settingId, readRaw, writeRaw, syncIdentity } from '../core/config.js';
 import { scrubIni, validateBundle } from '../core/setups.js';
-import { READY_LINE, assertLaunchSafe, assertInstallPathSafe, buildLaunchPlan, defaultFlags, normaliseMods, installedMods, reportMods } from '../core/servers.js';
+import { READY_LINE, assertLaunchSafe, assertInstallPathSafe, buildLaunchPlan, defaultFlags, normaliseMods, installedMods, isModTrouble, modFailureMessage, reportMods } from '../core/servers.js';
 import { INSTALL_PATH_LIMIT } from '../lib/paths.js';
 import type { ServerInstance, SetupBundle } from '../types.js';
 
@@ -372,8 +372,10 @@ test('mods: the diagnosis names the mod that never downloaded', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-moddiag-'));
   // ARK unpacks each mod into a folder named after its id.
   const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods');
-  fs.mkdirSync(path.join(modsDir, '929800'), { recursive: true });
-  fs.mkdirSync(path.join(modsDir, '933899'), { recursive: true });
+  for (const id of ['929800', '933899']) {
+    fs.mkdirSync(path.join(modsDir, id), { recursive: true });
+    fs.writeFileSync(path.join(modsDir, id, 'mod.pak'), 'x'.repeat(2048));
+  }
 
   const server = {
     ...({} as ServerInstance),
@@ -408,6 +410,7 @@ test('mods: the CurseForge layout nests ids a level deeper and is still read', (
   const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods');
   for (const folder of ['929800_7739804', '941697_6570902', '979566_8442174']) {
     fs.mkdirSync(path.join(modsDir, '83374', folder), { recursive: true });
+    fs.writeFileSync(path.join(modsDir, '83374', folder, 'mod.pak'), 'x'.repeat(2048));
   }
 
   const server = {
@@ -433,4 +436,83 @@ test('mods: the CurseForge layout nests ids a level deeper and is still read', (
   assert.equal(report.get('929800')?.downloaded, true, 'an installed mod reads as installed');
   assert.equal(report.get('941697')?.downloaded, true);
   assert.equal(report.get('928988')?.downloaded, false, 'the one that never unpacked is spotted');
+});
+
+/** A server shaped just enough for the mod checks to run against. */
+const modServer = (installPath: string, mods: unknown[]): ServerInstance =>
+  ({
+    ...({} as ServerInstance),
+    id: 'srv_modfixture', name: 'T', map: 'TheIsland_WP', installPath, sessionName: 'T',
+    serverPassword: '', adminPassword: 'x', spectatorPassword: '', motd: '', multihome: '',
+    port: 7777, queryPort: 27015, rconPort: 27020, rconEnabled: true, maxPlayers: 70,
+    clusterId: '', clusterDir: '', activeEvent: '', extraArgs: '', extraQuery: '',
+    flags: defaultFlags(),
+    mods: normaliseMods(mods),
+  }) as ServerInstance;
+
+test('mods: an empty folder is a half-download, not a download', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-modempty-'));
+  const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods', '83374');
+  // The real failure: ARK made the folder, the download died, and every later
+  // start saw the folder and decided the mod was already there.
+  fs.mkdirSync(path.join(modsDir, '929800_7739804'), { recursive: true });
+  fs.writeFileSync(path.join(modsDir, '929800_7739804', 'mod.pak'), 'x'.repeat(2048));
+  fs.mkdirSync(path.join(modsDir, '941697_6570902'), { recursive: true });
+
+  const server = modServer(dir, [
+    { id: '929800', name: 'TG Stacking' },
+    { id: '941697', name: 'Better Breeding' },
+  ]);
+
+  const report = new Map(reportMods(server).mods.map((m) => [m.id, m]));
+  assert.equal(report.get('929800')?.status, 'ok');
+  assert.ok((report.get('929800')?.sizeMB ?? 0) >= 0, 'a real mod reports a size');
+  assert.equal(report.get('929800')?.fileId, '7739804', 'the CurseForge file id is read off the folder');
+  assert.equal(report.get('941697')?.status, 'partial', 'an empty folder is not a download');
+  assert.equal(report.get('941697')?.downloaded, false);
+  assert.match(reportMods(server).verdict, /Better Breeding \(941697\)/);
+  assert.match(reportMods(server).verdict, /half-downloaded/);
+});
+
+test('mods: a download stuck in .temp is reported as half-finished', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-modtemp-'));
+  const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods', '83374');
+  fs.mkdirSync(path.join(modsDir, '.temp', '941697_6570902'), { recursive: true });
+  // Even with bytes in it, .temp means ARK never moved it into place.
+  fs.writeFileSync(path.join(modsDir, '.temp', '941697_6570902', 'mod.pak'), 'x'.repeat(2048));
+  fs.mkdirSync(path.join(modsDir, '929800_7739804'), { recursive: true });
+  fs.writeFileSync(path.join(modsDir, '929800_7739804', 'mod.pak'), 'x'.repeat(2048));
+
+  const server = modServer(dir, [
+    { id: '929800', name: 'TG Stacking' },
+    { id: '941697', name: 'Better Breeding' },
+  ]);
+
+  const report = new Map(reportMods(server).mods.map((m) => [m.id, m]));
+  assert.equal(report.get('941697')?.status, 'partial');
+  assert.ok(reportMods(server).advice.some((line) => /Force re-download/.test(line)), 'it says what to do next');
+});
+
+test('mods: the failure message names the mod instead of blaming "a mod"', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-modmsg-'));
+  const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods', '83374');
+  fs.mkdirSync(path.join(modsDir, '929800_7739804'), { recursive: true });
+  fs.writeFileSync(path.join(modsDir, '929800_7739804', 'mod.pak'), 'x'.repeat(2048));
+
+  const server = modServer(dir, [
+    { id: '929800', name: 'TG Stacking' },
+    { id: '999999', name: 'Deleted From CurseForge' },
+  ]);
+
+  const message = modFailureMessage(server);
+  assert.match(message, /Deleted From CurseForge \(999999\) never downloaded/);
+  assert.ok(!message.includes('TG Stacking'), 'a mod that is fine is not named as a suspect');
+});
+
+test('mods: ARK\u2019s own complaints are recognised, ordinary log noise is not', () => {
+  assert.ok(isModTrouble('[2026.08.31-16.02.11:993][  0]Unable to create a directory C:\ASA\...'));
+  assert.ok(isModTrouble('Requested mods failed to load on server'));
+  assert.ok(isModTrouble('LogMods: Error: Mod 941697 failed to download after 3 attempts'));
+  assert.ok(!isModTrouble('LogMods: Mounting mod 929800'));
+  assert.ok(!isModTrouble('Full startup: 42.11 seconds (BP compile: 0.00 seconds)'));
 });

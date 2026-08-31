@@ -7,6 +7,7 @@ import { Button, Empty, Meter, StateBadge, Stat, Badge, Toggle, SearchInput } fr
 import { Tooltip, Help } from '../components/Tooltip';
 import { AreaChart, Sparkline, type Point } from '../components/charts';
 import { Icon } from '../components/Icons';
+import { QuickActionsRow } from '../components/QuickActions';
 import { duration, memory } from '../lib/format';
 import { matches } from '../lib/search';
 import type { MetricPoint, ServerInstance, ServerRuntime } from '../lib/types';
@@ -419,6 +420,8 @@ function ServerCard({
               : 'Stays down after a reboot until someone presses Start'
           }
         />
+
+        <QuickActionsRow server={server} runtime={runtime} />
 
         <div className="row" style={{ gap: 6 }}>
           {state === 'running' || state === 'starting' ? (
