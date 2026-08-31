@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { ROOT } from '../lib/paths.js';
 import { bus, notice } from '../lib/bus.js';
 import { logger } from '../lib/log.js';
+import { shutdownApp } from '../lib/lifecycle.js';
 
 const log = logger('updates');
 
@@ -62,10 +63,27 @@ const WINDOWS_SHIMS = new Set(['npm', 'npx', 'yarn', 'pnpm']);
 
 function run(cmd: string, args: string[], opts: { stream?: boolean } = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const exe = process.platform === 'win32' && WINDOWS_SHIMS.has(cmd) ? `${cmd}.cmd` : cmd;
-    // No shell: the arguments carry branch names off a remote, and a shell
-    // would give those a way to mean something other than an argument.
-    const child = spawn(exe, args, { cwd: ROOT, windowsHide: true });
+    /**
+     * Those shims are batch files, and since the fix for CVE-2024-27980 Node
+     * refuses to spawn one directly - it throws EINVAL before the process
+     * exists, which is not an event any handler here would ever see. A shell
+     * is the supported way to run them, and safe for these two calls because
+     * every argument is a literal written above.
+     *
+     * git is a real executable and stays shell-free: its arguments carry
+     * branch names off a remote, and a shell would give those a way to mean
+     * something other than an argument.
+     */
+    const viaShell = process.platform === 'win32' && WINDOWS_SHIMS.has(cmd);
+    let child;
+    try {
+      child = spawn(cmd, args, { cwd: ROOT, windowsHide: true, shell: viaShell });
+    } catch (err) {
+      // A throw here would escape applyUpdate and surface as a bare "spawn
+      // EINVAL", losing the step that failed and what to do about it.
+      resolve({ code: -1, out: '', err: err instanceof Error ? err.message : String(err) });
+      return;
+    }
 
     let out = '';
     let err = '';
@@ -187,6 +205,89 @@ export interface UpdateResult {
   /** True once files have changed and only a restart is outstanding. */
   restartRequired: boolean;
   message: string;
+  /** Set when the update was asked to restart ASMS and did. */
+  restarting?: boolean;
+}
+
+// ---------------------------------------------------------------- restarting
+
+/** Inside a container, exiting *is* the restart - the orchestrator brings it back. */
+function inContainer(): boolean {
+  return fs.existsSync('/.dockerenv') || process.env.ASMS_IN_CONTAINER === '1';
+}
+
+export interface RelaunchPlan {
+  /** Whether ASMS arranged to start itself again, or is relying on something else to. */
+  relaunched: boolean;
+  how: string;
+}
+
+/**
+ * Arrange for ASMS to be running again shortly after this process exits.
+ *
+ * The trick is that nothing inside a dying process can start its replacement:
+ * the port is still held, and anything it spawns as a child is at the mercy of
+ * how it was killed. So a tiny detached node process is started first, whose
+ * only job is to watch this pid, wait for it to go, and start ASMS again.
+ *
+ * On Windows it relaunches start.cmd where there is one, because that is how
+ * people start ASMS and it puts the console window back where they expect it.
+ */
+export function relaunch(): RelaunchPlan {
+  if (inContainer()) {
+    return {
+      relaunched: false,
+      how: 'ASMS is in a container, so it exits and Docker starts it again - that is what restart: unless-stopped is for.',
+    };
+  }
+
+  const starter = path.join(ROOT, 'start.cmd');
+  const useStarter = process.platform === 'win32' && fs.existsSync(starter);
+  // `start` needs an empty title first, or it reads the path as the title.
+  const spec = useStarter
+    ? { exe: 'cmd.exe', args: ['/c', 'start', '', 'start.cmd'] }
+    : { exe: process.execPath, args: process.argv.slice(1) };
+
+  const waiter = `
+    const { spawn } = require('child_process');
+    const parent = ${process.pid};
+    const alive = () => { try { process.kill(parent, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+    let waited = 0;
+    const timer = setInterval(() => {
+      waited += 250;
+      if (alive() && waited < 30000) return;
+      clearInterval(timer);
+      spawn(${JSON.stringify(spec.exe)}, ${JSON.stringify(spec.args)}, {
+        cwd: ${JSON.stringify(ROOT)},
+        detached: true,
+        stdio: 'ignore',
+      }).unref();
+      setTimeout(() => process.exit(0), 1000);
+    }, 250);
+  `;
+
+  try {
+    const child = spawn(process.execPath, ['-e', waiter], {
+      cwd: ROOT,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    log.info(`relaunch armed via ${spec.exe} ${spec.args.join(' ')}`);
+    return {
+      relaunched: true,
+      how: useStarter
+        ? 'ASMS will close and start.cmd opens it again in a fresh window.'
+        : 'ASMS will close and start itself again a moment later.',
+    };
+  } catch (err) {
+    log.error('could not arrange a relaunch', err);
+    return {
+      relaunched: false,
+      how: `ASMS could not arrange to start itself again (${err instanceof Error ? err.message : String(err)}). Start it by hand after it closes.`,
+    };
+  }
 }
 
 /**
@@ -195,7 +296,7 @@ export interface UpdateResult {
  * a service - for a self-restart to be safe in all of them, and a manager that
  * fails to come back up is worse than one that asks to be restarted.
  */
-export async function applyUpdate(): Promise<UpdateResult> {
+export async function applyUpdate(opts: { restart?: boolean } = {}): Promise<UpdateResult> {
   if (running) return { ok: false, restartRequired: false, message: 'An update is already running.' };
 
   const status = await checkForUpdate();
@@ -205,11 +306,24 @@ export async function applyUpdate(): Promise<UpdateResult> {
   // Refuse to touch a tree with local edits rather than throwing away work or
   // stopping half way through a merge conflict.
   const dirty = await git('status', '--porcelain', '--untracked-files=no');
-  if (dirty.code === 0 && dirty.out) {
+  const changed =
+    dirty.code === 0 && dirty.out
+      ? dirty.out.split('\n').map((line) => line.slice(3).trim()).filter(Boolean)
+      : [];
+  /**
+   * Except the lockfile. npm rewrites it whenever it disagrees with the
+   * manifests - a stale entry, a different npm version, an optional dependency
+   * that does not apply to this platform - and it does that during install,
+   * which every ASMS install has run. Counting that as "your work" locked a
+   * perfectly ordinary machine out of every future update, and npm regenerates
+   * it on the next install anyway.
+   */
+  const edited = changed.filter((file) => file !== 'package-lock.json');
+  if (edited.length) {
     return {
       ok: false,
       restartRequired: false,
-      message: `This folder has local changes to ${dirty.out.split('\n').length} tracked file(s). Commit or discard them first - updating would overwrite them.`,
+      message: `This folder has local changes to ${edited.length} tracked file(s) - ${edited.slice(0, 4).join(', ')}${edited.length > 4 ? ', …' : ''}. Commit or discard them first: updating would overwrite them.`,
     };
   }
 
@@ -217,6 +331,11 @@ export async function applyUpdate(): Promise<UpdateResult> {
   const step = (line: string) => bus.emitEvent('app:update', { line });
   try {
     step(`Updating from ${status.currentSha ?? '?'} to ${status.latestSha ?? '?'} (${status.behind} commits)...`);
+
+    if (changed.length) {
+      step('Setting package-lock.json back to the committed one - npm rewrites it on install.');
+      await git('checkout', '--', 'package-lock.json');
+    }
 
     const pull = await run('git', ['merge', '--ff-only', `origin/${status.branch}`], { stream: true });
     if (pull.code !== 0) {
@@ -241,14 +360,43 @@ export async function applyUpdate(): Promise<UpdateResult> {
       return { ok: false, restartRequired: true, message };
     }
 
-    step('Done. Restart ASMS to finish.');
     log.info(`updated to ${status.latestSha}`);
-    notice('success', 'ASMS updated', 'Restart ASMS to load the new version. Your ARK servers keep running.');
     await checkForUpdate();
-    return { ok: true, restartRequired: true, message: 'Updated. Restart ASMS to load the new version.' };
+
+    if (!opts.restart) {
+      step('Done. Restart ASMS to finish.');
+      notice('success', 'ASMS updated', 'Restart ASMS to load the new version. Your ARK servers keep running.');
+      return { ok: true, restartRequired: true, message: 'Updated. Restart ASMS to load the new version.' };
+    }
+
+    const plan = restartApp(2000);
+    step(`Done. ${plan.how}`);
+    notice('success', 'ASMS updated', `${plan.how} Your ARK servers keep running.`);
+    return {
+      ok: true,
+      restartRequired: true,
+      restarting: true,
+      message: `Updated to ${status.latestSha}. ${plan.how}`,
+    };
   } finally {
     running = false;
   }
+}
+
+/**
+ * Shut ASMS down cleanly, having already arranged for it to come back.
+ *
+ * The delay exists so the answer to the request that asked for this reaches the
+ * browser before the socket it came in on is closed underneath it.
+ */
+export function restartApp(delayMs = 600): RelaunchPlan {
+  const plan = relaunch();
+  // Deliberately not unref'd: this timer is the restart, and nothing else
+  // should be able to let the process settle before it fires.
+  setTimeout(() => {
+    void shutdownApp('restart requested from the dashboard');
+  }, delayMs);
+  return plan;
 }
 
 export function updateRunning(): boolean {

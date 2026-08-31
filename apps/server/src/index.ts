@@ -8,6 +8,7 @@ import cors from 'cors';
 import { load, settings, saveNow, listenConfig } from './lib/store.js';
 import { ensureDirs, WEB_DIST, DATA_DIR } from './lib/paths.js';
 import { logger } from './lib/log.js';
+import { onShutdown } from './lib/lifecycle.js';
 import { createApi } from './api/index.js';
 import { attachWebsocket } from './ws.js';
 import * as servers from './core/servers.js';
@@ -111,6 +112,8 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  // The Restart button on the Settings page wants exactly this sequence.
+  onShutdown((reason) => shutdown(reason));
   process.on('uncaughtException', (err) => log.error('uncaught exception', err));
   process.on('unhandledRejection', (err) => log.error('unhandled rejection', err));
 }

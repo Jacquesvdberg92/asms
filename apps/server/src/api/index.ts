@@ -155,7 +155,16 @@ export function createApi(): Router {
 
   api.post(
     '/system/app-update/apply',
-    wrap(async () => updates.applyUpdate()),
+    wrap(async (req) => updates.applyUpdate({ restart: req.body?.restart === true })),
+  );
+
+  /** Restart ASMS itself. The ARK servers it manages keep running. */
+  api.post(
+    '/system/restart',
+    wrap(async () => {
+      const plan = updates.restartApp();
+      return { ok: true, ...plan };
+    }),
   );
 
   api.post(
