@@ -288,11 +288,22 @@ export interface SavedSetup {
   bundle: SetupBundle;
 }
 
+/** ok: unpacked with files in it. partial: a folder with nothing usable in it. */
+export type ModStatus = 'ok' | 'partial' | 'missing' | 'unknown';
+
 export interface ModReport {
   id: string;
   name: string;
   enabled: boolean;
   downloaded: boolean | null;
+  status: ModStatus;
+  /** Half-extracted in ARK’s .temp folder rather than unpacked beside it. */
+  staging: boolean;
+  folder: string | null;
+  fileId: string | null;
+  sizeMB: number;
+  files: number;
+  updatedAt: number | null;
 }
 
 export interface ModDiagnosis {
@@ -300,6 +311,10 @@ export interface ModDiagnosis {
   root: string | null;
   lastRunFailed: boolean;
   verdict: string;
+  /** What to do next, in the order worth trying. */
+  advice: string[];
+  /** ARK's own words, quoted from its output and its log. */
+  evidence: string[];
   pathCheck: InstallPathCheck;
 }
 

@@ -2,6 +2,32 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [Unreleased]
+
+### Quick actions
+- A Quick actions card on Overview and Console: save the world, list players, read server info
+  and the MOTD, jump the in-game clock to dawn, morning, noon, dusk, night or any time you pick,
+  broadcast to everyone, and wipe wild creatures, every tame, or one species
+- Four of the same actions on each dashboard card — save, broadcast, set the time, wipe wild —
+  shown only while RCON is answering
+- `DestroyAllTamedDinos` and `DestroyAllEnemies` added to the RCON command reference
+
+### Mods
+- **Download mods now** boots the server purely to fetch its mods, reports how many have landed,
+  and shuts it down again as soon as they are all on disk. Cancellable
+- **Force re-download** deletes what ARK unpacked for one mod, including anything stranded in
+  `.temp`, so it stops mistaking a dead download for a finished one
+- A Files column showing what is actually on disk per mod: size, CurseForge build id and date,
+  or whether it is missing, half-downloaded, or stuck in `.temp`
+- An empty mod folder now reads as a half-download rather than a success — the state that let a
+  broken mod hide in plain sight
+- Failure messages name the mods: "a mod would not load" is now "Better Breeding (941697) is only
+  half-downloaded". Check mods adds ordered next steps and quotes ARK's own words from its log
+
+### Fixed
+- The launch wrapper split on the letter "s" instead of on whitespace, breaking Proton and Wine
+  wrapper paths that contained one
+
 ## [0.1.0] — 2026-08-31
 
 First public release.

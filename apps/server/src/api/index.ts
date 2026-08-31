@@ -366,6 +366,34 @@ export function createApi(): Router {
     wrap(async (req) => servers.diagnoseMods(req.params.id)),
   );
 
+  // Cheap enough to poll: it only walks the mod folders on disk.
+  api.get(
+    '/servers/:id/mods/status',
+    wrap(async (req) => servers.diagnoseMods(req.params.id)),
+  );
+
+  /**
+   * Boot the server just far enough to pull its mods down. Fire and forget, the
+   * way an install is - it can take twenty minutes, and the runtime feed
+   * already carries the progress.
+   */
+  api.post(
+    '/servers/:id/mods/download',
+    wrap(async (req) => {
+      // Checked here so a server that is running, or has no mods on, answers
+      // with the reason rather than a cheerful "started".
+      servers.assertCanDownloadMods(req.params.id);
+      void servers.downloadMods(req.params.id).catch(() => {});
+      return { ok: true, started: true };
+    }),
+  );
+
+  /** Delete what ARK unpacked for one mod, so the next start fetches it again. */
+  api.post(
+    '/servers/:id/mods/:modId/refresh',
+    wrap(async (req) => servers.clearModFiles(req.params.id, req.params.modId)),
+  );
+
   api.post(
     '/servers/:id/rcon/diagnose',
     wrap(async (req) => servers.diagnoseRcon(req.params.id)),
