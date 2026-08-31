@@ -46,3 +46,14 @@ First public release.
 ### Added before release
 - **Settings → ASMS version**, which checks the repository for newer commits and can pull,
   reinstall and rebuild in place.
+
+### Fixed by the first CI run
+- **`npm test` did not run at all on Windows with Node 20.** The test script relied on the shell
+  expanding `src/tests/*.test.ts`; cmd.exe does not, and Node only began expanding globs itself in
+  v22. On the most likely setup for a gaming PC inside our supported range, the whole suite failed
+  with "Could not find". The file list is now built by `scripts/run-tests.mjs`, which behaves the
+  same everywhere.
+- **Log filename sanitising differed by platform.** `path.basename` only treats `\` as a separator
+  on Windows, so a Windows-style name reaching the Linux build was kept whole instead of being
+  reduced to its last segment. Nothing escaped the log directory either way — the prefix check
+  held — but the two hosts no longer disagree about what the same input means.

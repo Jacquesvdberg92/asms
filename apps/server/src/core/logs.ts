@@ -28,9 +28,18 @@ function dirFor(serverId: string, source: LogSource): string {
   return ark.logDir(need(serverId).installPath);
 }
 
-/** Never let a crafted name escape the directory it belongs to. */
+/**
+ * Never let a crafted name escape the directory it belongs to.
+ *
+ * Backslashes are folded to forward slashes first, because `path.basename` only
+ * treats them as separators on Windows. On Linux - which is where the Docker
+ * image runs - `..\..\..\asms.json` is one long filename, so basename hands it
+ * back whole. The prefix check below still holds and nothing escapes, but the
+ * name that lands on disk differs by platform for the same input. Folding first
+ * makes both hosts neutralise a Windows-style path the same way.
+ */
 function resolveLog(dir: string, file: string): string {
-  const resolved = path.resolve(dir, path.basename(file));
+  const resolved = path.resolve(dir, path.basename(file.replace(/\\/g, '/')));
   if (!resolved.startsWith(path.resolve(dir) + path.sep) && resolved !== path.resolve(dir)) {
     throw new Error('Invalid log file name');
   }
