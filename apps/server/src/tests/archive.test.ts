@@ -165,7 +165,7 @@ test('archive: exporting without secrets strips them from the record and the INI
   assert.equal(bundle.hasSecrets, false);
   assert.equal(bundle.servers[0].adminPassword, '');
   assert.equal(bundle.servers[0].serverPassword, '');
-  assert.equal(bundle.settings.password, '');
+  assert.equal(bundle.settings.passwordHash, '');
   assert.doesNotMatch(bundle.configs[server.id].gus, /hunter2|joinme/);
   // Game settings are not secret and must survive the scrub.
   assert.match(bundle.configs[server.id].game, /BabyMatureSpeedMultiplier=25\.0/);

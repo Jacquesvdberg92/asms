@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore, useAction } from '../../lib/store';
-import { api, downloadUrl } from '../../lib/api';
+import { api, download } from '../../lib/api';
 import { Button, Confirm, Empty, Field, Badge, Callout, SearchInput } from '../../components/ui';
 import { Icon } from '../../components/Icons';
 import { Help } from '../../components/Tooltip';
@@ -95,9 +95,9 @@ export default function Backups({ server, runtime }: { server: ServerInstance; r
                     <td className="right num">{bytes(backup.sizeBytes)}</td>
                     <td className="right">
                       <div className="btn-group" style={{ justifyContent: 'flex-end' }}>
-                        <a className="btn btn-sm btn-ghost" href={downloadUrl(`/backups/${backup.id}/download`)}>
+                        <button className="btn btn-sm btn-ghost" onClick={() => void download(`/backups/${backup.id}/download`)}>
                           <Icon.Download size={13} /> Download
-                        </a>
+                        </button>
                         <Button size="sm" disabled={!stopped} title={stopped ? '' : 'Stop the server first'} onClick={() => setRestoring(backup)}>
                           Restore
                         </Button>

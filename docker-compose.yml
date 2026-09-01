@@ -16,8 +16,14 @@ services:
     # `systemctl enable docker` on Linux, or Docker Desktop's "start when you
     # sign in" on Windows.
     restart: unless-stopped
+    # Node would otherwise be PID 1 and inherit the job of reaping the helpers
+    # SteamCMD and Proton leave behind.
+    init: true
     ports:
-      - "8787:8787"       # the dashboard
+      # Bound to this machine only by default. Change to "8787:8787" to reach
+      # the dashboard from your phone or another PC - and set ASMS_PASSWORD
+      # below before you do, because that opens it to everything on the network.
+      - "127.0.0.1:8787:8787"   # the dashboard
       - "7777:7777/udp"   # first ARK server - game
       - "7778:7778/udp"   # ASA also binds game port + 1
       - "27015:27015/udp" # Steam query

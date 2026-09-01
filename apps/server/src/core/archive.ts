@@ -31,6 +31,9 @@ import * as servers from './servers.js';
 import * as scheduler from './scheduler.js';
 import * as setupsCore from './setups.js';
 import { cleanClusterId } from './library.js';
+import { validateSettings } from './settings.js';
+import { isHash } from '../lib/password.js';
+import { revokeAll } from '../api/auth.js';
 import type {
   AppSettings,
   ArchiveBundle,
@@ -142,7 +145,9 @@ export function exportArchive(input: ExportInput = {}): ArchiveBundle {
     exportedBy: 'ASMS',
     host: os.hostname(),
     hasSecrets: includeSecrets,
-    settings: includeSecrets ? { ...db.settings } : { ...db.settings, password: '', discordWebhook: '' },
+    // The password travels as its scrypt hash, never as itself — a restore
+    // still signs you in with the password you already know.
+    settings: includeSecrets ? { ...db.settings } : { ...db.settings, passwordHash: '', discordWebhook: '' },
     servers: db.servers.map((server) => ({
       ...server,
       mods: server.mods.map((mod) => ({ ...mod })),
@@ -307,32 +312,20 @@ function validateSetup(input: unknown): SavedSetup | null {
   }
 }
 
-function validateSettings(input: unknown, current: AppSettings): AppSettings {
-  const raw = (input ?? {}) as Partial<AppSettings>;
-  const merged: AppSettings = { ...current };
-  const strings: Array<keyof AppSettings> = [
-    'steamCmdPath',
-    'launchWrapper',
-    'defaultInstallRoot',
-    'backupRoot',
-    'clusterRoot',
-    'password',
-    'bindHost',
-    'theme',
-    'accent',
-    'discordWebhook',
-  ];
-  for (const key of strings) {
-    if (typeof raw[key] === 'string') (merged[key] as string) = text(raw[key], MAX_PATH);
-  }
-  merged.port = int(raw.port, current.port, 1, 65535);
-  merged.updateCheckInterval = int(raw.updateCheckInterval, current.updateCheckInterval, 0, 1440);
-  merged.autoStartDelay = int(raw.autoStartDelay, current.autoStartDelay, 0, 600);
-  merged.backupRetention = int(raw.backupRetention, current.backupRetention, 1, 200);
-  merged.openBrowserOnStart = bool(raw.openBrowserOnStart, current.openBrowserOnStart);
-  merged.notifyOn = Array.isArray(raw.notifyOn)
-    ? raw.notifyOn.map((kind) => text(kind, 20)).filter(Boolean).slice(0, 20)
-    : current.notifyOn;
+/**
+ * Settings out of an archive.
+ *
+ * The field-by-field rebuild lives in core/settings.ts so this and
+ * `PUT /api/settings` can never drift apart — that endpoint used to have no
+ * validation at all while this one did. Only the password hash is handled here,
+ * because it is the one field an archive may legitimately carry and a browser
+ * may not.
+ */
+function settingsFromArchive(input: unknown, current: AppSettings): AppSettings {
+  const raw = (input ?? {}) as Record<string, unknown>;
+  const merged = validateSettings(raw, current);
+  const incoming = raw.passwordHash;
+  merged.passwordHash = isHash(incoming) ? String(incoming) : '';
   return merged;
 }
 
@@ -406,7 +399,7 @@ export function validateArchive(input: unknown): ArchiveBundle {
     exportedBy: text(raw.exportedBy, 40) || 'unknown',
     host: text(raw.host, 60) || 'unknown',
     hasSecrets: bool(raw.hasSecrets, true),
-    settings: validateSettings(raw.settings, appSettings()),
+    settings: settingsFromArchive(raw.settings, appSettings()),
     servers: serverList,
     schedules,
     backups,
@@ -515,11 +508,31 @@ export function importArchive(
   const warnings: string[] = [];
   let added = 0;
   let replaced = 0;
+  let passwordChanged = false;
 
   if (parts.settings) {
     const keepLocal = rebasePaths ? LOCAL_FOLDER_KEYS.map((key) => [key, db.settings[key] as string] as const) : [];
-    db.settings = { ...db.settings, ...bundle.settings };
+    const previousHash = db.settings.passwordHash;
+    /**
+     * Where ASMS listens is a fact about this machine, not about the cluster
+     * being restored. Carrying the other PC's bind address across is how a
+     * restore ends with a dashboard that will not come back up on the next
+     * start, long after the browser that did it has gone.
+     */
+    const localHost = db.settings.bindHost;
+    const localPort = db.settings.port;
+
+    db.settings = { ...db.settings, ...bundle.settings, bindHost: localHost, port: localPort };
     for (const [key, value] of keepLocal) (db.settings[key] as string) = value;
+
+    if (db.settings.passwordHash !== previousHash) {
+      passwordChanged = true;
+      warnings.push(
+        db.settings.passwordHash
+          ? 'The dashboard password came from the backup — sign in with the password from the machine it was exported on. Everyone signed in here has been signed out.'
+          : 'That backup had no dashboard password, so sign-in is now switched off. Set one under Settings → Access.',
+      );
+    }
     applied.push(rebasePaths ? "ASMS settings (this machine's folders kept)" : 'ASMS settings');
   }
 
@@ -641,10 +654,14 @@ export function importArchive(
   }
 
   save();
+  // A password that arrived with the archive must not leave old sessions open:
+  // they were authenticated against a password that no longer exists.
+  if (passwordChanged) revokeAll();
   // New servers need runtimes, and replaced ones need their build id read
   // again from whatever is on this machine's disk.
   servers.resyncRuntimes();
   servers.scheduleUpdateCheck();
+  scheduler.resetCache();
   bus.emitEvent('server:changed', { id: null });
   bus.emitEvent('schedule:changed', {});
   bus.emitEvent('backup:changed', { serverId: null });

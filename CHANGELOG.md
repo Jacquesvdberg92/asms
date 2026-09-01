@@ -4,6 +4,13 @@ Notable changes to ASMS. Dates are the day the change landed.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-01
+
+Two halves. The mod and quick-action work that had been sitting unreleased,
+and a hardening pass: a full read of the codebase turned up 29 issues and this
+fixes all of them. Nothing in the second half changes what ASMS does — it
+changes what happens when something goes wrong.
+
 ### Quick actions
 - A Quick actions card on Overview and Console: save the world, list players, read server info
   and the MOTD, jump the in-game clock to dawn, morning, noon, dusk, night or any time you pick,
@@ -23,6 +30,13 @@ Notable changes to ASMS. Dates are the day the change landed.
   broken mod hide in plain sight
 - Failure messages name the mods: "a mod would not load" is now "Better Breeding (941697) is only
   half-downloaded". Check mods adds ordered next steps and quotes ARK's own words from its log
+- A mod ARK **refused outright** is now told apart from one that merely failed to arrive. ASMS
+  reads `Mods not installed: <id>` out of ARK's log and says so plainly: CurseForge served nothing
+  for that id, so re-downloading cannot help. Force re-download is hidden for those, replaced by a
+  link to `curseforge.com/projects/<id>`, which redirects to whatever that id really is
+- **PC-only server** (`-ServerPlatform=PC`) added to the launch flags. CurseForge never serves a
+  mod marked `[PC Only]` to a cross-platform server, which is the most common reason an id that
+  looks perfectly valid never downloads and takes the server down with it
 
 ### Updating ASMS itself
 - **Update and restart** — pulls, reinstalls, rebuilds and restarts ASMS on its own. The page
@@ -39,6 +53,89 @@ Notable changes to ASMS. Dates are the day the change landed.
   touch. It also no longer counts that generated file as your work
 - The launch wrapper split on the letter "s" instead of on whitespace, breaking Proton and Wine
   wrapper paths that contained one
+
+### Security
+
+- **The API no longer sends `Access-Control-Allow-Origin: *`.** The dashboard is
+  served from the same origin and never needed CORS. With it, any page in any
+  tab could call the API and read the answer — list your servers, read admin and
+  RCON passwords out of `/api/state`, stop or delete things. It also made
+  "bind to 127.0.0.1" no protection at all, because the attacking page runs on
+  this machine too
+- **A password is set on first run** and printed once to the console, rather than
+  starting wide open with a warning nobody running detached would see. Clear it
+  under Settings → Access if you genuinely want it open
+- **`docker-compose.yml` publishes the dashboard on `127.0.0.1` by default.**
+  Change it to `8787:8787` to reach it from a phone — after setting `ASMS_PASSWORD`
+- **The dashboard password is stored as a scrypt hash**, not in the clear, and is
+  never sent to a browser. Existing passwords are hashed automatically on first
+  start; nobody has to re-enter anything. The Settings page only sends a password
+  when you type a new one
+- **Failed sign-ins are rate limited** — five free attempts, then a doubling
+  lockout capped at an hour, and every failure is logged
+- **Downloads and the websocket use one-shot tickets** instead of putting the
+  session token in a URL, where it lands in access logs and browser history
+- Backup restore refuses any archive entry that would write outside the
+  destination
+
+### Fixed
+
+- **Backups are streamed to disk** instead of being built in memory. The old
+  writer held every save file *and* the finished archive as Buffers, which does
+  not degrade on a real world — it kills the process, unattended, on the
+  scheduled-backup path
+- **`PUT /api/settings` validates its input.** `{"password": 12345}` used to be
+  saved to disk and then throw out of the auth check on every request from the
+  next boot on: a permanent 500 on every route, sign-in included, fixable only
+  by hand-editing `asms.json`
+- **Pid files carry a process fingerprint.** After an unclean shutdown the OS
+  recycles pids, and ASMS would adopt whatever now held the number — showing a
+  stopped server as running, and killing an unrelated process tree on Stop
+- **"Port already in use" says so** instead of exiting on a raw Node stack trace
+- **Schedules are validated on the way in.** An unknown action reported "ok" and
+  did nothing, a missing server was only found at run time, and a malformed
+  `warnMinutes` either skipped the player countdown entirely or threw out of the
+  tick loop — silently stopping every task after it
+- **A cron that can never fire is refused**, e.g. the 31st of February. It used
+  to save fine and cost 1.3 seconds of blocked event loop per dashboard load
+- `killTree` kills the whole process group on Linux, so a Proton-wrapped server
+  no longer survives being stopped and keeps the game port
+- The RCON read buffer is reset on reconnect, so leftover bytes from a dropped
+  connection cannot desync the next reply
+- `start()` cannot spawn two servers on one port when two requests land together
+- An uncaught exception now flushes the database and exits instead of carrying on
+- Restoring a backup warns when it replaces your dashboard password, revokes
+  open sessions, and keeps this machine's listen address and port
+- The dashboard no longer opens a second websocket on reconnect, which was
+  printing every console line twice
+- Clearing the port field no longer saves port 0
+- The Discord webhook honours a port in the URL, is validated when saved, and has
+  a **Send test** button
+
+### Changed
+
+- ASMS's own log rolls over at midnight and prunes anything older than 30 days
+- The mod status check is cached, and the stats poll reuses one PowerShell
+  process instead of spawning a fresh one every five seconds forever
+- The Logs tab stops polling while the tab is hidden or the server is stopped
+- Deleting a server's files refuses anything that is not plainly a server folder
+- `findFreePort` throws instead of returning a port it just found to be busy
+- The SteamCMD download caps redirects, checks the host, and writes to a `.part`
+  file so a failed attempt cannot leave a truncated zip behind
+- Backup reconciliation now adopts zips it finds in the backup folder, which is
+  what its comment always claimed — so copying a backups folder across works
+- `asms.json` is fsynced before the rename, so a power cut cannot leave it empty
+- API errors carry a real status: 404 for missing, 409 for wrong state, and a
+  logged 500 for anything unexpected instead of leaking internals as a 400
+- The unused `theme` setting is gone; only `accent` was ever read
+- ESLint runs in CI, and the `eslint-disable` comments scattered through the code
+  finally mean something
+- 21 new tests covering settings validation, password hashing, cron, the delete
+  guard and zip extraction — the perimeter where every bug above lived
+- `adm-zip` replaced with `yazl`/`yauzl`; the dashboard shows the version number
+  an update would bring, not just a commit count
+- The dashboard says "Cannot reach ASMS" instead of spinning forever when the
+  server is not answering
 
 ## [0.1.0] — 2026-08-31
 

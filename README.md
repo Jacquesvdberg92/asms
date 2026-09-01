@@ -315,6 +315,11 @@ Then open <http://localhost:8787>. The first run builds the image, which takes a
 after that it is seconds. SteamCMD is already in the image, so there is no install step — the
 dashboard goes straight to **New server**.
 
+The dashboard is published on `127.0.0.1` only, so it is reachable from the host and nowhere else.
+To open it to your network — a phone, a laptop — set `ASMS_PASSWORD` in `docker-compose.yml` first,
+then change the port line to `"8787:8787"`. Watch `docker compose logs asms` on the first run either
+way: with no `ASMS_PASSWORD` set, ASMS generates a password and prints it there once.
+
 The commands you will actually use:
 
 ```bash
@@ -398,9 +403,10 @@ the queue carries on.
   your phone, with a copy button.
 - **Custom address** — one specific network card, or behind a reverse proxy.
 
-Set a password before choosing anything but the first. **Do not port-forward 8787.** If you want it
-from outside the house, put it behind a VPN such as Tailscale or WireGuard, or an authenticating
-HTTPS reverse proxy.
+**This PC only** is the default. Make sure a password is set before choosing either of the others —
+ASMS sets one for you on first run, so normally there is nothing to do. **Do not port-forward 8787.**
+If you want it from outside the house, put it behind a VPN such as Tailscale or WireGuard, or an
+authenticating HTTPS reverse proxy.
 
 ---
 
@@ -450,10 +456,13 @@ the server, backup and cluster folders), `ASMS_PASSWORD` (forced on every start 
 
 ## Security
 
-ASMS listens on `0.0.0.0:8787` by default so you can reach it from your phone — see
-[Reaching ASMS from your phone](#reaching-asms-from-your-phone) for the three listen modes. **Set a
-password** under Settings → Access &amp; remote control if this machine is reachable by anyone you do
-not trust: without one, anyone who can reach the port can start, stop and reconfigure your servers.
+ASMS listens on `127.0.0.1:8787` — this PC only — and on first run it sets a dashboard password for
+you and prints it to the console once. Write that down. To reach ASMS from your phone, switch to
+**Anything on my network** under Settings → Access; see
+[Reaching ASMS from your phone](#reaching-asms-from-your-phone) for the three listen modes.
+
+Without a password, anyone who can reach the port can start, stop and reconfigure your servers, so
+clearing it is only sensible while ASMS is bound to this PC only.
 
 Do not expose port 8787 to the internet directly. Use a VPN, Tailscale, or an authenticating reverse
 proxy with TLS.
@@ -461,8 +470,10 @@ proxy with TLS.
 Setup files you export contain no passwords, ports or paths, but they do list your mods and rates —
 share them as freely as you would a screenshot of your settings.
 
-Forgot the password? Stop ASMS, clear the `password` field in `data/asms.json`, start it again. If
-you set `ASMS_PASSWORD`, clear that instead — it is reapplied on every start.
+Forgot the password? Stop ASMS, clear the `passwordHash` field in `data/asms.json` (set it to `""`),
+start it again, and set a new one under Settings → Access. The stored value is a scrypt hash, so
+there is nothing to read out of it. If you set `ASMS_PASSWORD`, clear that instead — it is reapplied
+on every start.
 
 ---
 
@@ -507,10 +518,11 @@ Three causes, all of which ASMS now catches:
   longer puts names or passwords in the launch URL at all — they go in the INI, one value per line —
   and a mangled value left over from an earlier run is repaired before the next start.
 
-- **A question mark in the admin password.** ARK separates its launch options with `?`, so
-  `my pass?word` boots a server whose password is really `my pass`. Everything else works — players
-  join fine — but nothing admin does. ASMS refuses to save one now, flags any existing server with
-  the problem on startup, and says so on the password field itself.
+- **A question mark in the admin password.** ARK separates its launch options with `?`, so a
+  password passed *in the launch URL* is cut short at the first one. This is why ASMS stopped
+  putting them there: passwords now travel in `GameUserSettings.ini`, one value per line, where a
+  `?` is an ordinary character. You can use one freely. A line break is the character that still
+  cannot work — it would split the value into two INI settings — and ASMS refuses to save one.
 - **Changing the password while the server runs.** ARK reads it once at boot, so the running server
   keeps the old one while the dashboard shows the new one. Every tab of that server now carries a
   "Restart needed" bar until you restart it.

@@ -29,6 +29,7 @@ export interface LaunchFlags {
   noAntiSpeedHack: boolean;
   ignoreDupedItems: boolean;
   exclusiveJoin: boolean;
+  pcOnlyServer: boolean;
   automanagedmods: boolean;
 }
 
@@ -128,25 +129,34 @@ export interface ScheduleTask {
   nextRun: number | null;
 }
 
+/**
+ * Settings as the browser sees them. The password itself never crosses the
+ * wire in either direction as a stored value: the server keeps a scrypt hash
+ * and only says whether one is set. To change it, send a `password` field on
+ * the PUT — omit it and the existing one is left alone.
+ */
 export interface AppSettings {
   steamCmdPath: string;
   launchWrapper: string;
   defaultInstallRoot: string;
   backupRoot: string;
   clusterRoot: string;
-  password: string;
+  /** True when signing in is required. Read-only. */
+  passwordSet: boolean;
   bindHost: string;
   port: number;
   updateCheckInterval: number;
   /** Seconds left between servers when ASMS auto-starts them on boot. */
   autoStartDelay: number;
   backupRetention: number;
-  theme: string;
   accent: string;
   discordWebhook: string;
   notifyOn: string[];
   openBrowserOnStart: boolean;
 }
+
+/** What a settings save may carry. `password` is only sent when it changed. */
+export type SettingsPatch = Partial<Omit<AppSettings, 'passwordSet'>> & { password?: string };
 
 export interface MapDef {
   code: string;
@@ -289,7 +299,7 @@ export interface SavedSetup {
 }
 
 /** ok: unpacked with files in it. partial: a folder with nothing usable in it. */
-export type ModStatus = 'ok' | 'partial' | 'missing' | 'unknown';
+export type ModStatus = 'ok' | 'partial' | 'missing' | 'rejected' | 'unknown';
 
 export interface ModReport {
   id: string;

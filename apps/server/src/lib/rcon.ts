@@ -66,6 +66,12 @@ export class RconClient extends EventEmitter {
       const socket = net.createConnection({ host, port });
       this.socket = socket;
       this.closing = false;
+      // Bytes left over from the socket that just died are not a prefix of what
+      // this one is about to say. ARK drops idle RCON connections mid-stream, so
+      // without this the next reply is parsed starting from the middle of the
+      // last one - and a length read out of a message body desyncs the frame
+      // loop or resolves a command with somebody else's output.
+      this.buffer = Buffer.alloc(0);
       let settled = false;
 
       const cleanup = (): void => {

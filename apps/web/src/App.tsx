@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from 'react-router-dom';
 import { useStore } from './lib/store';
 import { Shell } from './components/Shell';
@@ -49,15 +50,35 @@ function Layout() {
 }
 
 export default function App() {
-  const { ready, authRequired, signedIn, settings, toasts, dismissToast } = useStore();
+  const { ready, authRequired, signedIn, unreachable, settings, toasts, dismissToast } = useStore();
 
-  if (settings?.accent) document.documentElement.setAttribute('data-accent', settings.accent);
+  // Applied as an effect rather than during render: writing to the DOM in a
+  // render body runs twice under StrictMode and fights concurrent rendering.
+  useEffect(() => {
+    if (settings?.accent) document.documentElement.setAttribute('data-accent', settings.accent);
+  }, [settings?.accent]);
 
   if (!ready) {
     return (
       <div className="login-wrap">
         <div className="row dim">
           <span className="spinner" /> Starting ASMS…
+        </div>
+      </div>
+    );
+  }
+
+  if (unreachable) {
+    return (
+      <div className="login-wrap">
+        <div className="stack" style={{ textAlign: 'center', maxWidth: 420, gap: 8 }}>
+          <div className="row" style={{ justifyContent: 'center' }}>
+            <span className="spinner" /> <span className="strong">Cannot reach ASMS</span>
+          </div>
+          <p className="dim small">
+            The dashboard is open but the ASMS server is not answering. If you just restarted it, this clears on its own in a
+            few seconds. Otherwise check the window ASMS is running in.
+          </p>
         </div>
       </div>
     );

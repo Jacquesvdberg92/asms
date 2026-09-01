@@ -20,6 +20,8 @@ const log = logger('updates');
 export interface UpdateStatus {
   /** Version from the root package.json. */
   current: string;
+  /** Version at the top of the tracked branch, when it can be read. */
+  latest: string | null;
   /** Short commit currently checked out, when this is a git install. */
   currentSha: string | null;
   /** Short commit at the top of the tracked branch. */
@@ -134,6 +136,7 @@ export function lastCheck(): UpdateStatus | null {
 export async function checkForUpdate(): Promise<UpdateStatus> {
   const base: UpdateStatus = {
     current: localVersion(),
+    latest: null,
     currentSha: null,
     latestSha: null,
     behind: null,
@@ -177,16 +180,28 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
     return lastStatus;
   }
 
-  const [head, remote, count, subjects] = await Promise.all([
+  const [head, remote, count, subjects, manifest] = await Promise.all([
     git('rev-parse', '--short', 'HEAD'),
     git('rev-parse', '--short', `origin/${branch}`),
     git('rev-list', '--count', `HEAD..origin/${branch}`),
     git('log', '--no-merges', '--format=%s', '--max-count=20', `HEAD..origin/${branch}`),
+    // The released version number, not just a commit count. "0.2.0 → 0.3.0"
+    // means far more to the people this is built for than "14 commits behind".
+    git('show', `origin/${branch}:package.json`),
   ]);
 
   const behind = count.code === 0 ? Number(count.out) : null;
+  let latest: string | null = null;
+  if (manifest.code === 0) {
+    try {
+      latest = (JSON.parse(manifest.out) as { version?: string }).version ?? null;
+    } catch {
+      latest = null; // Not worth failing an update check over.
+    }
+  }
   lastStatus = {
     ...base,
+    latest,
     currentSha: head.code === 0 ? head.out : null,
     latestSha: remote.code === 0 ? remote.out : null,
     behind,

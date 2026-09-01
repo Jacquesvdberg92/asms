@@ -31,6 +31,11 @@ const MOD_STATE: Record<ModStatus, { tone?: 'ok' | 'warn' | 'bad' | 'info'; labe
     label: 'Not downloaded',
     help: 'No folder for this mod at all. Either it has never been fetched, or the download failed outright. Download mods now is the quickest way to find out which.',
   },
+  rejected: {
+    tone: 'bad',
+    label: 'Refused by CurseForge',
+    help: 'ARK asked CurseForge for this id and got nothing back, then named it in “Mods not installed” and quit. Downloading again cannot help — either the id is not an ASA mod, or the mod is marked [PC Only] and this server also accepts consoles.',
+  },
   unknown: { label: 'Not checked', help: 'ARK has not made a mods folder yet, so there is nothing to compare against.' },
 };
 
@@ -178,7 +183,7 @@ export default function Mods({ server, runtime }: { server: ServerInstance; runt
   });
 
   // Only the saved list is on disk, so unsaved additions have no status yet.
-  const broken = (status?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+  const broken = (status?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial' || m.status === 'rejected'));
 
   return (
     <div className="stack">
@@ -549,7 +554,9 @@ function ModFiles({
           {/* A mod that is switched off is not a problem, so it is not coloured like one. */}
           <Badge tone={report.enabled ? state.tone : undefined}>{staged ? 'Stuck in .temp' : state.label}</Badge>
         </Tooltip>
-        {report.status === 'unknown' ? null : (
+        {/* Nothing to clear, and offering it reads as a promise ARK cannot keep:
+            a mod CurseForge refuses does not come back on the next attempt. */}
+        {report.status === 'unknown' || report.status === 'rejected' ? null : (
           <Tooltip
             title="Force a re-download"
             body={
@@ -634,12 +641,14 @@ function ModDoctor({
         };
       case 'missing':
         return { icon: '✕', tone: 'var(--bad)', text: 'never downloaded — no folder for it at all' };
+      case 'rejected':
+        return { icon: '⊘', tone: 'var(--bad)', text: 'refused by CurseForge — ARK named this id in “Mods not installed”' };
       default:
         return { icon: '?', tone: 'var(--text-faint)', text: 'no mods folder to check against yet' };
     }
   };
 
-  const broken = (result?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+  const broken = (result?.mods ?? []).filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial' || m.status === 'rejected'));
 
   return (
     <Modal
@@ -681,7 +690,10 @@ function ModDoctor({
 
           {result.mods.map((mod) => {
             const state = mark(mod);
-            const fixable = mod.enabled && mod.status !== 'unknown';
+            // A mod CurseForge refused has nothing on disk to clear, and the
+            // fix is on its mod page rather than here.
+            const fixable = mod.enabled && mod.status !== 'unknown' && mod.status !== 'rejected';
+            const lookup = mod.status === 'rejected' ? `https://www.curseforge.com/projects/${mod.id}` : null;
             return (
               <div key={mod.id} className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
                 <span className="strong" style={{ color: state.tone, width: 14, flex: 'none' }}>
@@ -706,6 +718,10 @@ function ModDoctor({
                   >
                     <Icon.Refresh size={13} /> Force re-download
                   </Button>
+                ) : lookup ? (
+                  <ExternalLink href={lookup} className="small">
+                    What is this id?
+                  </ExternalLink>
                 ) : null}
               </div>
             );

@@ -60,8 +60,41 @@ export const api = {
   del: <T,>(path: string) => request<T>('DELETE', path),
 };
 
-/** Absolute URL for downloads, which cannot carry an Authorization header. */
-export function downloadUrl(path: string): string {
-  const token = getToken();
-  return `/api${path}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+/**
+ * Start a download.
+ *
+ * A plain navigation cannot carry an Authorization header, so this used to put
+ * the session token in the query string — where it lands in access logs,
+ * browser history and any proxy in between. Instead the server issues a ticket
+ * that is good for this one path, once, for a minute.
+ */
+export async function download(path: string): Promise<void> {
+  const url = await downloadUrl(path);
+  const link = document.createElement('a');
+  link.href = url;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+/** The ticketed URL for a download, for cases that need the string itself. */
+export async function downloadUrl(path: string): Promise<string> {
+  const base = `/api${path}`;
+  if (!getToken()) return base;
+  // The ticket is issued for the path the server will see, query string and all.
+  const { ticket } = await api.post<{ ticket: string }>('/auth/ticket', { path: base.split('?')[0] });
+  const join = base.includes('?') ? '&' : '?';
+  return `${base}${join}ticket=${encodeURIComponent(ticket)}`;
+}
+
+/** A one-shot ticket for the websocket handshake, which cannot send headers either. */
+export async function socketTicket(): Promise<string | null> {
+  if (!getToken()) return null;
+  try {
+    const { ticket } = await api.post<{ ticket: string }>('/auth/ticket', { path: '/ws' });
+    return ticket;
+  } catch {
+    return null;
+  }
 }

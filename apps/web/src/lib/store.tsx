@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { api, getToken, setToken } from './api';
+import { api, getToken, setToken, socketTicket } from './api';
 import type {
   AppSettings,
   BackupEntry,
@@ -19,6 +19,8 @@ interface StateShape {
   authRequired: boolean;
   signedIn: boolean;
   connected: boolean;
+  /** ASMS itself is not answering — shown instead of an empty dashboard. */
+  unreachable: boolean;
   servers: ServerInstance[];
   runtimes: Record<string, ServerRuntime>;
   schedules: ScheduleTask[];
@@ -60,6 +62,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     authRequired: false,
     signedIn: false,
     connected: false,
+    unreachable: false,
     servers: [],
     runtimes: {},
     schedules: [],
@@ -140,27 +143,53 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({ ...s, system }));
   }, []);
 
-  const connectSocket = useCallback(() => {
-    socket.current?.close();
-    const token = getToken();
+  const connectSocket = useCallback(async () => {
+    /**
+     * Detach the old socket's handlers before closing it. Without this its
+     * onclose fired and scheduled *another* reconnect, so a sign-in while a
+     * socket was open left two live sockets — every console line printed twice
+     * and every runtime frame processed twice.
+     */
+    const previous = socket.current;
+    socket.current = null;
+    if (previous) {
+      previous.onopen = null;
+      previous.onclose = null;
+      previous.onmessage = null;
+      previous.close();
+    }
+
+    const ticket = await socketTicket();
+    if (authRequiredRef.current && !ticket) return; // Signed out; nothing to connect with.
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const url = `${proto}://${location.host}/ws${ticket ? `?ticket=${encodeURIComponent(ticket)}` : ''}`;
     const ws = new WebSocket(url);
     socket.current = ws;
 
     ws.onopen = () => {
+      // A reconnect means we were away: hello re-seeds servers, runtimes and
+      // schedules, but backups, setups and the library would stay stale.
+      const reconnected = retry.current > 0;
       retry.current = 0;
       setState((s) => ({ ...s, connected: true }));
+      if (reconnected) void loadAll().catch(() => {});
     };
     ws.onclose = () => {
+      if (socket.current !== ws) return; // Superseded; its replacement owns the retry.
       setState((s) => ({ ...s, connected: false }));
       const delay = Math.min(10_000, 500 * 2 ** retry.current++);
       setTimeout(() => {
-        if (!authRequiredRef.current || getToken() !== null) connectSocket();
+        if (!authRequiredRef.current || getToken() !== null) void connectSocket();
       }, delay);
     };
     ws.onmessage = (event) => {
-      const { type, payload } = JSON.parse(event.data as string) as { type: string; payload: any };
+      let type: string;
+      let payload: any;
+      try {
+        ({ type, payload } = JSON.parse(event.data as string) as { type: string; payload: any });
+      } catch {
+        return; // A frame we cannot read is not worth taking the page down for.
+      }
       switch (type) {
         case 'hello':
           setState((s) => ({
@@ -225,11 +254,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           break;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pushConsole, toast]);
+    // loadAll is stable (useCallback with no deps); listing it would recreate
+  }, [pushConsole, toast, loadAll]);
 
   const boot = useCallback(async () => {
-    const { required } = await api.get<{ required: boolean }>('/auth/status');
+    let required = false;
+    try {
+      ({ required } = await api.get<{ required: boolean }>('/auth/status'));
+    } catch {
+      // ASMS is not answering. Say so rather than spinning on "Starting ASMS…"
+      // forever, and try again — it may still be coming up.
+      setState((s) => ({ ...s, ready: true, signedIn: false, connected: false, unreachable: true }));
+      setTimeout(() => void boot(), 3000);
+      return;
+    }
+    setState((s) => ({ ...s, unreachable: false }));
     if (required && !getToken()) {
       setState((s) => ({ ...s, ready: true, authRequired: true, signedIn: false }));
       return;
@@ -238,7 +277,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       await loadAll();
       await refreshSystem();
-      connectSocket();
+      await connectSocket();
     } catch {
       setState((s) => ({ ...s, ready: true, signedIn: false }));
     }
@@ -258,7 +297,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setToken(token);
       await loadAll();
       await refreshSystem();
-      connectSocket();
+      await connectSocket();
     },
     [connectSocket, loadAll, refreshSystem],
   );

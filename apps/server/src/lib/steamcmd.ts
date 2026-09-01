@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
-import AdmZip from 'adm-zip';
+import { extractZip } from './zip.js';
 import { STEAMCMD_DIR, TOOLS_DIR, ASA_APP_ID, ark, ensureDir } from './paths.js';
 import { settings } from './store.js';
 import { logger } from './log.js';
@@ -22,12 +22,44 @@ export function isSteamCmdInstalled(): boolean {
   return fs.existsSync(steamCmdPath());
 }
 
-function download(url: string, dest: string, onProgress?: (pct: number) => void): Promise<void> {
+/** Hosts Valve actually serves SteamCMD from. A redirect anywhere else is refused. */
+const ALLOWED_HOSTS = /(^|\.)(akamaihd\.net|steamstatic\.com|steampowered\.com|valvesoftware\.com)$/i;
+
+const MAX_REDIRECTS = 5;
+
+/**
+ * Fetch a file to disk.
+ *
+ * Redirects are followed but counted, and the destination host is checked each
+ * hop: an unbounded redirect chain used to recurse until the stack gave out,
+ * and nothing stopped a hop leaving Valve's CDN entirely. The download lands on
+ * a `.part` file and is only renamed once it finishes, so a failed attempt can
+ * never leave a truncated zip where the next run expects an archive.
+ */
+function download(url: string, dest: string, onProgress?: (pct: number) => void, hops = 0): Promise<void> {
   return new Promise((resolve, reject) => {
+    let host: string;
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      reject(new Error(`Not a usable download URL: ${url}`));
+      return;
+    }
+    if (!ALLOWED_HOSTS.test(host)) {
+      reject(new Error(`Refusing to download SteamCMD from ${host} - that is not one of Valve's servers.`));
+      return;
+    }
+
+    const part = `${dest}.part`;
     const req = https.get(url, { headers: { 'User-Agent': 'ASMS' } }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        download(res.headers.location, dest, onProgress).then(resolve, reject);
+        if (hops >= MAX_REDIRECTS) {
+          reject(new Error(`Gave up after ${MAX_REDIRECTS} redirects fetching SteamCMD.`));
+          return;
+        }
+        const next = new URL(res.headers.location, url).toString();
+        download(next, dest, onProgress, hops + 1).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) {
@@ -37,31 +69,66 @@ function download(url: string, dest: string, onProgress?: (pct: number) => void)
       }
       const total = Number(res.headers['content-length'] ?? 0);
       let seen = 0;
-      const out = fs.createWriteStream(dest);
+      const out = fs.createWriteStream(part);
+      const fail = (err: Error) => {
+        out.destroy();
+        fs.rmSync(part, { force: true });
+        reject(err);
+      };
       res.on('data', (c: Buffer) => {
         seen += c.length;
         if (total && onProgress) onProgress(Math.round((seen / total) * 100));
       });
+      res.on('error', fail);
       res.pipe(out);
-      out.on('finish', () => out.close(() => resolve()));
-      out.on('error', reject);
+      out.on('finish', () =>
+        out.close(() => {
+          try {
+            fs.renameSync(part, dest);
+            resolve();
+          } catch (err) {
+            fail(err instanceof Error ? err : new Error(String(err)));
+          }
+        }),
+      );
+      out.on('error', fail);
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      fs.rmSync(`${dest}.part`, { force: true });
+      reject(err);
+    });
     req.setTimeout(60_000, () => req.destroy(new Error('Download timed out')));
   });
 }
 
-/** Fetch and unpack SteamCMD into data/tools/steamcmd if it is not there yet. */
-export async function ensureSteamCmd(onLine?: (line: string) => void): Promise<string> {
+/** In-flight install, shared so two callers cannot download over each other. */
+let installing: Promise<string> | null = null;
+
+/**
+ * Fetch and unpack SteamCMD into data/tools/steamcmd if it is not there yet.
+ *
+ * Pressing Install on two servers at once, or pressing it while the automatic
+ * one is already running, used to start two downloads writing the same file.
+ */
+export function ensureSteamCmd(onLine?: (line: string) => void): Promise<string> {
   const exe = steamCmdPath();
-  if (fs.existsSync(exe)) return exe;
+  if (fs.existsSync(exe)) return Promise.resolve(exe);
+  if (installing) return installing;
+  installing = doInstall(onLine).finally(() => {
+    installing = null;
+  });
+  return installing;
+}
+
+async function doInstall(onLine?: (line: string) => void): Promise<string> {
   ensureDir(STEAMCMD_DIR);
   onLine?.('SteamCMD not found - downloading from Valve...');
 
   if (process.platform === 'win32') {
     const zip = path.join(TOOLS_DIR, 'steamcmd.zip');
     await download(WIN_ZIP, zip, (p) => onLine?.(`Downloading SteamCMD... ${p}%`));
-    new AdmZip(zip).extractAllTo(STEAMCMD_DIR, true);
+    // extractZip refuses any entry that would resolve outside the destination.
+    await extractZip(zip, STEAMCMD_DIR);
     fs.rmSync(zip, { force: true });
   } else {
     const tgz = path.join(TOOLS_DIR, 'steamcmd.tar.gz');

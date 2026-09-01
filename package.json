@@ -1,6 +1,6 @@
 {
   "name": "asms",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "ASMS - Ark Server Management Suite. A sleek, self-hosted manager for ARK: Survival Ascended dedicated servers.",
   "workspaces": [
@@ -14,10 +14,16 @@
     "build": "npm --workspace @asms/web run build && npm --workspace @asms/server run build",
     "start": "node apps/server/dist/index.js",
     "typecheck": "npm --workspace @asms/server run typecheck && npm --workspace @asms/web run typecheck",
-    "test": "npm --workspace @asms/server run test"
+    "test": "npm --workspace @asms/server run test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^15.15.0",
+    "typescript-eslint": "^8.69.0"
   },
   "engines": {
     "node": ">=20"

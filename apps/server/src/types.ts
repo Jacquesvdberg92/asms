@@ -36,6 +36,7 @@ export interface LaunchFlags {
   noAntiSpeedHack: boolean;
   ignoreDupedItems: boolean;
   exclusiveJoin: boolean;
+  pcOnlyServer: boolean;
   automanagedmods: boolean;
 }
 
@@ -171,8 +172,11 @@ export interface AppSettings {
   defaultInstallRoot: string;
   backupRoot: string;
   clusterRoot: string;
-  /** Empty string disables auth entirely (localhost-only use). */
-  password: string;
+  /**
+   * scrypt hash of the dashboard password, or empty to disable sign-in.
+   * Never sent to a client — see core/settings.ts publicSettings().
+   */
+  passwordHash: string;
   bindHost: string;
   port: number;
   /** minutes; 0 disables */
@@ -180,7 +184,6 @@ export interface AppSettings {
   /** Seconds left between servers when ASMS auto-starts them on boot. */
   autoStartDelay: number;
   backupRetention: number;
-  theme: string;
   accent: string;
   discordWebhook: string;
   notifyOn: string[];

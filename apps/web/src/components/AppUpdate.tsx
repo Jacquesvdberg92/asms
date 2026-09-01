@@ -6,6 +6,7 @@ import { Icon } from './Icons';
 
 interface UpdateStatus {
   current: string;
+  latest: string | null;
   currentSha: string | null;
   latestSha: string | null;
   behind: number | null;
@@ -130,7 +131,11 @@ export function AppUpdate() {
             <div className="row" style={{ gap: 8 }}>
               <span className="strong mono">{version}</span>
               {status?.available ? (
-                <Badge tone="warn">{status.behind} behind</Badge>
+                /* A version number when the remote has one, because "0.2.0 to 0.3.0"
+                   says more than a commit count to anyone not reading the log. */
+                <Badge tone="warn">
+                  {status.latest && status.latest !== status.current ? `${status.latest} available` : `${status.behind} behind`}
+                </Badge>
               ) : status && !status.blocker ? (
                 <Badge tone="ok">up to date</Badge>
               ) : null}

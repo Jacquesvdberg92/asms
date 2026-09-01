@@ -13,7 +13,7 @@ import { matches } from '../lib/search';
 import type { MetricPoint, ServerInstance, ServerRuntime } from '../lib/types';
 
 export default function Dashboard() {
-  const { servers, runtimes, system, metrics, refreshSystem, toast } = useStore();
+  const { servers, runtimes, system, metrics, toast } = useStore();
   const [, run] = useAction();
   const [now, setNow] = useState(Date.now());
   const [find, setFind] = useState('');
@@ -206,7 +206,7 @@ function SetupChecklist() {
     const rt = runtimes[s.id];
     return rt?.state === 'running' || rt?.lastExitCode !== null;
   });
-  const secured = !!settings?.password || settings?.bindHost === '127.0.0.1';
+  const secured = !!settings?.passwordSet || settings?.bindHost === '127.0.0.1';
 
   const steps = [
     {

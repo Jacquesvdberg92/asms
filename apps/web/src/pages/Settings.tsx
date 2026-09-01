@@ -10,7 +10,13 @@ import { AppUpdate } from '../components/AppUpdate';
 import { matches } from '../lib/search';
 import { useHashTarget } from '../lib/hash';
 import { duration, memory } from '../lib/format';
-import type { AppSettings } from '../lib/types';
+import type { AppSettings, SettingsPatch } from '../lib/types';
+
+/** A whole number a socket can actually bind to. */
+const isPort = (value: string): boolean => {
+  const raw = value.trim();
+  return /^[0-9]{1,5}$/.test(raw) && Number(raw) >= 1 && Number(raw) <= 65535;
+};
 
 const ACCENTS = [
   { id: 'ember', label: 'Ember', color: '#ff7a2f' },
@@ -65,8 +71,20 @@ export default function Settings() {
   const [busy, run] = useAction();
   const [draft, setDraft] = useState<AppSettings | null>(settings);
   const [find, setFind] = useState('');
+  /**
+   * null means "not touched", which is what tells the server to leave the
+   * existing password alone. The password itself never arrives from the server
+   * any more — only whether one is set — so there is nothing to prefill.
+   */
+  const [password, setPassword] = useState<string | null>(null);
+  /** Raw text, so clearing the field does not silently become port 0. */
+  const [portText, setPortText] = useState<string | null>(null);
 
-  useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    setDraft(settings);
+    setPassword(null);
+    setPortText(null);
+  }, [settings]);
 
   // The palette links to /settings#access and friends, so land on the card and
   // flash it.
@@ -81,14 +99,29 @@ export default function Settings() {
   const bindMode = draft.bindHost === '127.0.0.1' || draft.bindHost === 'localhost' ? 'local' : draft.bindHost === '0.0.0.0' || !draft.bindHost ? 'network' : 'custom';
   const listenPort = system?.listen?.port ?? settings?.port ?? draft.port;
   const remoteUrls = (system?.addresses ?? []).map((address) => `http://${address}:${listenPort}`);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
+  // The port field keeps its raw text so clearing it does not read as zero.
+  const portValue = portText ?? String(draft.port);
+  const portBad = portValue.trim() !== '' && !isPort(portValue);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(settings) || password !== null;
 
   const save = () =>
     void run(async () => {
-      const res = await api.put<AppSettings & { sessionsRevoked?: boolean }>('/settings', draft);
+      if (portBad) throw new Error('The port has to be a whole number between 1 and 65535.');
+      // password is only sent when somebody actually typed in the field, so an
+      // ordinary save cannot clear a password by omitting it.
+      const patch: SettingsPatch = { ...draft, ...(password === null ? {} : { password }) };
+      delete (patch as { passwordSet?: unknown }).passwordSet;
+      const res = await api.put<AppSettings & { sessionsRevoked?: boolean }>('/settings', patch);
       if (res.sessionsRevoked) toast('warn', 'Password changed', 'Everyone signed in elsewhere has been signed out.');
+      setPassword(null);
+      setPortText(null);
       await refresh();
     }, 'Settings saved');
+
+  const testWebhook = () =>
+    void run(async () => {
+      await api.post('/settings/test-webhook', { webhook: draft.discordWebhook });
+    }, 'Test message sent — check the channel');
 
   return (
     <>
@@ -97,7 +130,15 @@ export default function Settings() {
         sub="Applies to ASMS itself — per-server options live on each server"
         actions={
           <>
-            <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(settings)}>
+            <Button
+              variant="ghost"
+              disabled={!dirty}
+              onClick={() => {
+                setDraft(settings);
+                setPassword(null);
+                setPortText(null);
+              }}
+            >
               Discard
             </Button>
             <Button variant="primary" busy={busy} disabled={!dirty} onClick={save}>
@@ -267,23 +308,51 @@ export default function Settings() {
                 help={
                   system?.listen?.fromEnv
                     ? `Ignored while ASMS_HOST/ASMS_PORT are set — currently listening on ${system.listen.host}:${system.listen.port}.`
-                    : 'Restart ASMS after changing this.'
+                    : portBad
+                      ? 'A whole number between 1 and 65535.'
+                      : 'Restart ASMS after changing this.'
                 }
               >
-                <input className="input" type="number" value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
+                <input
+                  className={`input ${portBad ? 'input-bad' : ''}`}
+                  inputMode="numeric"
+                  value={portValue}
+                  onChange={(e) => {
+                    setPortText(e.target.value);
+                    if (isPort(e.target.value)) set('port', Number(e.target.value));
+                  }}
+                  onBlur={() => setPortText(null)}
+                />
               </Field>
             </div>
 
             <Field
               label="ASMS password"
-              help="Set one if this machine is reachable by anyone else. Empty means no sign-in at all — fine for a single PC behind a router, not fine on a VPS."
+              help={
+                password === null && draft.passwordSet
+                  ? 'A password is set. Type a new one to change it, or clear the box and save to switch sign-in off.'
+                  : 'Set one if this machine is reachable by anyone else. Empty means no sign-in at all — fine for a single PC behind a router, not fine on a VPS.'
+              }
             >
-              <input className="input" type="password" value={draft.password} placeholder="No password set" onChange={(e) => set('password', e.target.value)} />
+              <input
+                className="input"
+                type="password"
+                value={password ?? ''}
+                autoComplete="new-password"
+                placeholder={draft.passwordSet ? '••••••••  (unchanged)' : 'No password set'}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </Field>
-            {!draft.password && bindMode !== 'local' ? (
+            {password !== null && password === '' && draft.passwordSet ? (
+              <Callout tone="warn" title="This will switch sign-in off">
+                Saving now removes the password entirely. Anyone who can reach this address will be able to control your
+                servers without signing in.
+              </Callout>
+            ) : null}
+            {!draft.passwordSet && password === null && bindMode !== 'local' ? (
               <Callout tone="warn" title="No password, and open to the network">
-                Anyone who can reach this port can start, stop, reconfigure and delete your servers — and read every password
-                on this page. Set one above, or switch to <span className="strong">This PC only</span>.
+                Anyone who can reach this port can start, stop, reconfigure and delete your servers — and read every server
+                password on this page. Set one above, or switch to <span className="strong">This PC only</span>.
               </Callout>
             ) : null}
 
@@ -323,7 +392,14 @@ export default function Settings() {
           </div>
           <div className="card-body stack">
             <Field label="Discord webhook URL" help="Server events get posted to this channel. Leave blank to disable.">
-              <input className="input input-mono" value={draft.discordWebhook} onChange={(e) => set('discordWebhook', e.target.value)} placeholder="https://discord.com/api/webhooks/…" />
+              <div className="row">
+                <input className="input input-mono" value={draft.discordWebhook} onChange={(e) => set('discordWebhook', e.target.value)} placeholder="https://discord.com/api/webhooks/…" />
+                {/* Proves the URL now, rather than three days later via the crash
+                    notification that never arrived. */}
+                <Button size="sm" busy={busy} disabled={!draft.discordWebhook.trim()} onClick={testWebhook}>
+                  Send test
+                </Button>
+              </div>
             </Field>
             <Field label="Notify about">
               <div className="row row-wrap">

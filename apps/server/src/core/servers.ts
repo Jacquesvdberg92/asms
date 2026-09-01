@@ -1,13 +1,25 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { data, save, id as newId, settings } from '../lib/store.js';
+import { data, save, id as newId, settings, ROOT } from '../lib/store.js';
 import { ark, ensureDir, checkInstallPath, DATA_DIR, type InstallPathCheck } from '../lib/paths.js';
 import { bus, notice } from '../lib/bus.js';
 import { logger } from '../lib/log.js';
+import { notFound } from '../api/errors.js';
 import { announce } from '../lib/notify.js';
-import { isAlive, killTree, sampleStats, findFreePort, canConnect } from '../lib/proc.js';
+import {
+  isAlive,
+  killTree,
+  sampleStats,
+  findFreePort,
+  canConnect,
+  identify,
+  sameProcess,
+  shutdownProcTools,
+  type ProcIdentity,
+} from '../lib/proc.js';
 import { getClient, dropClient, once } from '../lib/rcon.js';
 import { installOrUpdate, installedBuildId, latestBuildId } from '../lib/steamcmd.js';
 import { syncIdentity, readDoc } from './config.js';
@@ -66,6 +78,7 @@ export function defaultFlags(): LaunchFlags {
     noAntiSpeedHack: false,
     ignoreDupedItems: false,
     exclusiveJoin: false,
+    pcOnlyServer: false,
     automanagedmods: false,
   };
 }
@@ -141,7 +154,7 @@ export function get(id: string): ServerInstance | undefined {
 
 export function need(id: string): ServerInstance {
   const server = get(id);
-  if (!server) throw new Error(`No server with id ${id}`);
+  if (!server) throw notFound(`No server with id ${id}`);
   return server;
 }
 
@@ -336,8 +349,40 @@ export function normaliseMods(input: unknown): ModEntry[] {
   return out;
 }
 
-/** ARK's fatal line when -mods= names something it cannot mount. */
-export const MODS_FAILED = /Requested mods failed to load|mods failed to load on server/i;
+/**
+ * ARK's fatal lines when -mods= names something it cannot mount.
+ *
+ * There are two different failures behind one symptom. "Requested mods failed
+ * to load" is a mod that came down and would not mount; "Not all mods were
+ * installed" is CurseForge never handing the file over in the first place, and
+ * ARK follows it with `Mods not installed: <ids>`. Only the second one names
+ * the mod, which is why it is worth matching separately.
+ */
+export const MODS_FAILED = /Requested mods failed to load|mods failed to load on server|Not all mods were installed|^\s*Mods not installed:/im;
+
+/** `Mods not installed: 893657, 947033` — the ids CurseForge would not serve. */
+const MODS_NOT_INSTALLED = /Mods not installed:\s*([\d,\s]+)/i;
+
+/**
+ * The ids ARK named as never installed, read out of its own complaint.
+ *
+ * This is the one message that says which mod is at fault, and it means
+ * something quite specific: CurseForge returned nothing for that id against
+ * ARK's game id. Retrying cannot change that - the id is wrong for ASA, or the
+ * mod is flagged PC-only and this server also accepts consoles.
+ */
+export function rejectedModIds(lines: string[]): string[] {
+  const out = new Set<string>();
+  for (const line of lines) {
+    const match = MODS_NOT_INSTALLED.exec(line);
+    if (!match) continue;
+    for (const id of match[1].split(',')) {
+      const trimmed = id.trim();
+      if (/^\d{1,12}$/.test(trimmed)) out.add(trimmed);
+    }
+  }
+  return [...out];
+}
 
 /**
  * Lines worth keeping when a mod will not download. ARK buries these in a log
@@ -349,6 +394,13 @@ export const MODS_FAILED = /Requested mods failed to load|mods failed to load on
 const MOD_TROUBLE: RegExp[] = [
   /unable to create a directory/i,
   /Requested mods failed to load|mods failed to load on server/i,
+  // CurseForge never served the file. ARK prints these four lines together and
+  // every one of them carries part of the answer, including the two hints that
+  // name the only two causes it knows of.
+  /Not all mods were installed/i,
+  /Mods not installed:/i,
+  /Custom Cosmetics in the mod list/i,
+  /pc-only mods on a cross-platform server/i,
   /\bmod\b[^.\n]{0,80}(?:failed|could not be|unable to)[^.\n]{0,80}(?:download|install|extract|load|mount)/i,
   /(?:download|extract|install)[^.\n]{0,50}\bmod\b[^.\n]{0,80}(?:fail|error)/i,
   /no space left|not enough space|disk (?:is )?full/i,
@@ -528,9 +580,12 @@ function measureFolder(dir: string): { bytes: number; files: number; updatedAt: 
  *             half-extracted in .temp. This is what a mod that "downloaded"
  *             and still broke the server actually looks like on disk.
  * missing   — no folder at all
+ * rejected  — no folder, and ARK named this id in "Mods not installed". A
+ *             download that was never attempted rather than one that failed,
+ *             so retrying it is the one thing that cannot help.
  * unknown   — no mods folder yet, so there is nothing to compare against
  */
-export type ModStatus = 'ok' | 'partial' | 'missing' | 'unknown';
+export type ModStatus = 'ok' | 'partial' | 'missing' | 'rejected' | 'unknown';
 
 export interface ModReport {
   id: string;
@@ -568,29 +623,57 @@ export interface ModDiagnosis {
   pathCheck: InstallPathCheck;
 }
 
-export function diagnoseMods(id: string): ModDiagnosis {
+/**
+ * Diagnoses are cached, because working one out is not cheap.
+ *
+ * reportMods walks every mod folder with a statSync per file, capped at 5,000
+ * files each, and reads half a megabyte off the tail of ShooterGame.log. With a
+ * dozen mods that is tens of thousands of synchronous filesystem calls - and the
+ * Mods tab polls it. Nothing else is served while it runs, so the answer is kept
+ * for a few seconds and thrown away whenever something could have changed it.
+ */
+const modStatusCache = new Map<string, { at: number; value: ModDiagnosis }>();
+const MOD_STATUS_TTL_MS = 8000;
+
+export function forgetModStatus(id: string): void {
+  modStatusCache.delete(id);
+}
+
+export function diagnoseMods(id: string, fresh = false): ModDiagnosis {
   const server = need(id);
+  const cached = modStatusCache.get(id);
+  if (!fresh && cached && Date.now() - cached.at < MOD_STATUS_TTL_MS) return cached.value;
+
   const evidence = [...(modTrouble.get(id) ?? [])];
   for (const line of modTroubleFromLog(server)) if (!evidence.includes(line)) evidence.push(line);
-  return reportMods(server, modFailures.has(id), evidence);
+  const value = reportMods(server, modFailures.has(id), evidence);
+  modStatusCache.set(id, { at: Date.now(), value });
+  return value;
 }
 
 export function reportMods(server: ServerInstance, lastRunFailed = false, evidence: string[] = []): ModDiagnosis {
   const { root, found } = installedMods(server);
   const onDisk = new Map(found.map((entry) => [entry.id, entry]));
   const pathCheck = checkInstallPath(server.installPath);
+  // Only believed about a mod that is also absent: the log tail can outlive the
+  // failure it describes, and a mod sitting on disk has plainly since arrived.
+  const rejected = new Set(rejectedModIds(evidence));
 
   const mods: ModReport[] = server.mods.map((mod) => {
     const entry = onDisk.get(mod.id);
     const size = entry ? measureFolder(entry.folder) : { bytes: 0, files: 0, updatedAt: null };
     // An empty folder is not a download. Neither is one still sitting in .temp.
-    const status: ModStatus = !root
-      ? 'unknown'
-      : !entry
-        ? 'missing'
-        : entry.staging || size.bytes === 0
-          ? 'partial'
-          : 'ok';
+    const status: ModStatus = entry
+      ? entry.staging || size.bytes === 0
+        ? 'partial'
+        : 'ok'
+      : // ARK naming the id beats having no folder to look in: it is the one
+        // answer that does not depend on what did or did not land on disk.
+        rejected.has(mod.id)
+        ? 'rejected'
+        : !root
+          ? 'unknown'
+          : 'missing';
     return {
       id: mod.id,
       name: mod.name || `Mod ${mod.id}`,
@@ -608,15 +691,30 @@ export function reportMods(server: ServerInstance, lastRunFailed = false, eviden
 
   const requested = mods.filter((m) => m.enabled);
   const missing = requested.filter((m) => m.status === 'missing');
+  const refused = requested.filter((m) => m.status === 'rejected');
   const partial = requested.filter((m) => m.status === 'partial');
   const present = requested.filter((m) => m.status === 'ok');
-  const broken = [...missing, ...partial];
+  const broken = [...missing, ...refused, ...partial];
   const names = (list: ModReport[]) => list.map((m) => `${m.name} (${m.id})`).join(', ');
   const advice: string[] = [];
 
   let verdict: string;
   if (!requested.length) {
     verdict = 'No mods are switched on, so a mod cannot be what is stopping this server.';
+  } else if (refused.length) {
+    // Said first and said plainly, because every other branch ends in "try the
+    // download again" and this is the one case where that is a waste of twenty
+    // minutes: ARK asked CurseForge for the mod and CurseForge had nothing.
+    verdict = `ARK refused ${refused.length === 1 ? names(refused) : `these: ${names(refused)}`} outright — it asked CurseForge for ${refused.length === 1 ? 'it' : 'them'} and got nothing back, then quit rather than start without ${refused.length === 1 ? 'it' : 'them'}. That is not a download that failed, it is one that was never possible, so re-downloading cannot fix it. ARK knows of two causes: the mod is flagged PC-only while this server also accepts consoles, or the id is not an ARK: Survival Ascended mod at all.`;
+    for (const mod of refused) {
+      advice.push(
+        `Open https://www.curseforge.com/projects/${mod.id} — it redirects to whatever that id really is, so you can see at a glance whether it is the mod you meant${mod.name && !/^Mod \d+$/.test(mod.name) ? ` rather than ${mod.name}` : ''}. The number in a CurseForge URL is not the project id; the id is on the mod page under About.`,
+      );
+    }
+    advice.push(
+      'If the mod page says [PC Only], switch on “PC-only server” under Launch flags — that is the switch that makes CurseForge serve it. Console players can no longer join once it is on.',
+    );
+    advice.push(`Switching ${refused.length === 1 ? 'it' : 'them'} off gets the server up in the meantime.`);
   } else if (!root) {
     verdict =
       'ARK has not created a mods folder yet, so there is nothing to compare against. Press Download mods now and let it fetch them, then check again.';
@@ -670,14 +768,18 @@ export function reportMods(server: ServerInstance, lastRunFailed = false, eviden
  * mods that are actually not on disk and says what state they are in.
  */
 export function modFailureMessage(server: ServerInstance): string {
-  const diagnosis = reportMods(server, true);
-  const broken = diagnosis.mods.filter((m) => m.enabled && (m.status === 'missing' || m.status === 'partial'));
+  const diagnosis = reportMods(server, true, modTroubleFromLog(server));
+  const broken = diagnosis.mods.filter((m) => m.enabled && m.status !== 'ok' && m.status !== 'unknown');
   if (!broken.length) {
     return 'A mod would not load. Every enabled mod is on disk, so one of them does not match this ARK build, or two of them conflict.';
   }
-  const named = broken
-    .map((m) => `${m.name} (${m.id}) ${m.status === 'partial' ? 'is only half-downloaded' : 'never downloaded'}`)
-    .join(', ');
+  const said = (m: ModReport): string =>
+    m.status === 'partial'
+      ? 'is only half-downloaded'
+      : m.status === 'rejected'
+        ? 'was refused by CurseForge, so it never downloaded'
+        : 'never downloaded';
+  const named = broken.map((m) => `${m.name} (${m.id}) ${said(m)}`).join(', ');
   return `A mod would not load: ${named}. Mods → Check mods has the fix.`;
 }
 
@@ -794,7 +896,7 @@ export async function downloadMods(id: string): Promise<ModDiagnosis> {
     const proc = child;
     // Recorded like a real start, so an ASMS restart mid-fetch reattaches to
     // the process instead of leaving it orphaned on the game port.
-    writePid(id, proc.pid ?? 0);
+    void writePid(id, proc.pid ?? 0);
     beginPending(id, 'install', `Downloading mods for ${server.name}`, () => {
       cancelled = true;
       stop();
@@ -966,6 +1068,7 @@ export function update(id: string, patch: Partial<ServerInstance>): ServerInstan
   Object.assign(server, rest, { updatedAt: Date.now() });
   if (patch.flags) server.flags = { ...defaultFlags(), ...patch.flags };
   if (patch.mods) server.mods = normaliseMods(patch.mods);
+  forgetModStatus(id);
   save();
   // Force a fresh RCON client if the endpoint or password moved.
   dropClient(id);
@@ -974,8 +1077,46 @@ export function update(id: string, patch: Partial<ServerInstance>): ServerInstan
   return server;
 }
 
+/**
+ * Is this folder safe to delete recursively?
+ *
+ * "Delete the files too" used to be guarded only by "the string is non-empty and
+ * the path exists". installPath is free text on the server form, so a typo, a
+ * paste, or an archive imported without rebasing could leave it pointing at a
+ * drive root, a Steam library or a home directory - and one click removed it.
+ */
+export function assertSafeToDelete(installPath: string): void {
+  const full = path.resolve(installPath);
+  const parts = full.split(path.sep).filter(Boolean);
+  const root = path.parse(full).root;
+
+  if (full === root || parts.length < 2) {
+    throw new Error(`Refusing to delete ${full} - that is a drive root, not a server folder.`);
+  }
+  for (const guarded of [os.homedir(), DATA_DIR, ROOT]) {
+    const at = path.resolve(guarded);
+    if (full === at) throw new Error(`Refusing to delete ${full} - that is not a server folder.`);
+  }
+  // The one positive signal that this really is an ASA install. A server that
+  // was never installed has no files to delete anyway.
+  const looksLikeArk = fs.existsSync(path.join(full, 'ShooterGame'));
+  const underInstallRoot = full
+    .toLowerCase()
+    .startsWith(path.resolve(settings().defaultInstallRoot).toLowerCase() + path.sep);
+  if (!looksLikeArk && !underInstallRoot) {
+    throw new Error(
+      `Refusing to delete ${full}: it has no ShooterGame folder and is not under the install root, so it does not look like an ARK server. Delete it by hand if that is really what you want.`,
+    );
+  }
+}
+
 export async function remove(id: string, deleteFiles = false): Promise<void> {
   const server = need(id);
+  // Checked before anything is removed from the database, so a refusal leaves
+  // the server exactly as it was rather than half-deleted.
+  if (deleteFiles && server.installPath && fs.existsSync(server.installPath)) {
+    assertSafeToDelete(server.installPath);
+  }
   if (runtime(id).state !== 'stopped') await stop(id, { force: true });
   dropClient(id);
   const db = data();
@@ -986,8 +1127,10 @@ export async function remove(id: string, deleteFiles = false): Promise<void> {
   runtimes.delete(id);
   consoles.delete(id);
   metrics.forget(id);
+  forgetModStatus(id);
   if (deleteFiles && server.installPath && fs.existsSync(server.installPath)) {
     fs.rmSync(server.installPath, { recursive: true, force: true });
+    log.info(`deleted server files at ${server.installPath}`);
   }
   bus.emitEvent('server:changed', { id: null });
 }
@@ -1129,12 +1272,34 @@ export async function checkForUpdates(): Promise<{ latest: string | null; server
 
 // ------------------------------------------------------------------ start
 
+/**
+ * Servers with a start already under way.
+ *
+ * The state check below is not enough on its own: `start` awaits before it sets
+ * anything, so two calls landing together - a double-tap on a phone, the
+ * auto-restart timer firing as somebody presses Start - both read "stopped" and
+ * both go on to spawn. The second ARK loses the port bind but keeps running,
+ * and only the last pid is remembered. This claim is synchronous, so the second
+ * caller loses the race in the same tick it entered.
+ */
+const starting = new Set<string>();
+
 export async function start(id: string): Promise<void> {
   const server = need(id);
   const rt = runtime(id);
+  if (starting.has(id)) throw new Error('This server is already starting');
   if (rt.state !== 'stopped' && rt.state !== 'crashed') throw new Error(`Server is ${rt.state}`);
   if (!isInstalled(server)) throw new Error('Server files are not installed yet - run Install first');
 
+  starting.add(id);
+  try {
+    await launch(id, server);
+  } finally {
+    starting.delete(id);
+  }
+}
+
+async function launch(id: string, server: ServerInstance): Promise<void> {
   if (server.updateOnStart) {
     try {
       await installServer(id, false);
@@ -1159,13 +1324,18 @@ export async function start(id: string): Promise<void> {
     cwd: plan.cwd,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // On POSIX this makes the child a process group leader, which is what lets
+    // killTree signal the whole group. Under a Proton wrapper the pid we hold
+    // is the wrapper's, and killing only that leaves ARK on the game port.
+    detached: process.platform !== 'win32',
   });
   procs.set(id, child);
   modFailures.delete(id);
   modTrouble.delete(id);
+  forgetModStatus(id);
   patchRuntime(id, { pid: child.pid ?? null, identityStale: false });
   launchedIdentity.set(id, identityOf(server));
-  writePid(id, child.pid ?? 0);
+  void writePid(id, child.pid ?? 0);
 
   const onChunk = (stream: 'out' | 'err') => (buf: Buffer) => {
     for (const line of buf.toString('utf8').split(/\r?\n/)) {
@@ -1175,11 +1345,10 @@ export async function start(id: string): Promise<void> {
         if (runtime(id).state === 'starting') markRunning(id);
       }
       if (isModTrouble(line)) noteModTrouble(id, line);
-      if (MODS_FAILED.test(line)) {
-        modFailures.add(id);
-        // Name it here rather than making them open a modal to find out.
-        pushConsole(id, modFailureMessage(server), 'err');
-      }
+      // Only noted here. ARK spreads its refusal over several lines - the one
+      // naming the mod comes last - so the message that names it is built once
+      // the process is gone and the whole complaint is on record.
+      if (MODS_FAILED.test(line)) modFailures.add(id);
     }
   };
   child.stdout?.on('data', onChunk('out'));
@@ -1216,6 +1385,8 @@ export async function start(id: string): Promise<void> {
       if (modFailures.has(id)) {
         const message = modFailureMessage(server);
         patchRuntime(id, { lastError: message });
+        // Named in the console too, so it is there without opening a modal.
+        pushConsole(id, message, 'err');
         announce('crash', 'error', `${server.name}: a mod would not load`, message);
       } else {
         announce('crash', 'error', `${server.name} crashed`, `Exit code ${code}. ${server.autoRestartOnCrash ? 'Auto-restart is armed.' : ''}`);
@@ -1651,39 +1822,84 @@ function pidFile(id: string): string {
   return path.join(PID_DIR, `${id}.pid`);
 }
 
-function writePid(id: string, pid: number): void {
+/**
+ * Record a running server.
+ *
+ * Three lines: the pid, the identity hash it launched with, and a fingerprint
+ * of the process itself. The third one is what makes the first trustworthy -
+ * see adoptOrphans.
+ */
+async function writePid(id: string, pid: number): Promise<void> {
   ensureDir(PID_DIR);
   const server = get(id);
-  fs.writeFileSync(pidFile(id), `${pid}
-${server ? identityOf(server) : ''}`);
+  const proc = pid ? await identify(pid) : null;
+  const fingerprint = proc ? `${proc.name}|${proc.startedAt}` : '';
+  fs.writeFileSync(pidFile(id), `${pid}\n${server ? identityOf(server) : ''}\n${fingerprint}`);
 }
 
 function clearPid(id: string): void {
   fs.rmSync(pidFile(id), { force: true });
 }
 
+function parseFingerprint(pid: number, line: string | undefined): ProcIdentity | null {
+  if (!line?.trim()) return null;
+  const [name, startedAt] = line.trim().split('|');
+  return { pid, name: name ?? '', startedAt: Number(startedAt) || 0 };
+}
+
 /**
  * If ASMS was restarted while servers were running, pick them back up rather
  * than showing them as stopped or double-starting them.
+ *
+ * A pid on its own is not evidence. clearPid only runs on a clean exit, so a
+ * power cut, a taskkill or an OOM leaves the file behind - and after the reboot
+ * that follows, the OS has recycled that number onto something else entirely.
+ * ASMS would then show a stopped server as running and, on Stop, taskkill /T /F
+ * whatever now holds the number, and its children. So the recorded fingerprint
+ * has to match the live process before the pid is believed.
  */
-function adoptOrphans(): void {
+async function adoptOrphans(): Promise<void> {
   ensureDir(PID_DIR);
   for (const server of list()) {
     const file = pidFile(server.id);
     if (!fs.existsSync(file)) continue;
-    const [pidLine, identity] = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const [pidLine, identity, fingerprint] = fs.readFileSync(file, 'utf8').split(/\r?\n/);
     const pid = Number(pidLine.trim());
-    if (isAlive(pid)) {
-      // Knowing what it launched with survives an ASMS restart, so a password
-      // changed in the meantime is still reported honestly.
-      if (identity?.trim()) launchedIdentity.set(server.id, identity.trim());
-      patchRuntime(server.id, { state: 'running', pid });
-      refreshIdentityDrift(server.id);
-      pushConsole(server.id, `Reattached to running server process (pid ${pid}).`, 'sys');
-      log.info(`adopted running server ${server.name} (pid ${pid})`);
-    } else {
+
+    if (!isAlive(pid)) {
       fs.rmSync(file, { force: true });
+      continue;
     }
+
+    const recorded = parseFingerprint(pid, fingerprint);
+    const live = await identify(pid);
+    if (recorded && !sameProcess(recorded, live)) {
+      log.warn(
+        `pid ${pid} for ${server.name} now belongs to ${live?.name || 'another process'} - not adopting it. ` +
+          'This is a stale pid file from an unclean shutdown.',
+      );
+      pushConsole(
+        server.id,
+        `Ignored a stale pid file: process ${pid} is no longer this server. ASMS will not touch it. Start the server when you are ready.`,
+        'sys',
+      );
+      fs.rmSync(file, { force: true });
+      continue;
+    }
+    if (!recorded) {
+      // A pid file written by an older ASMS has no fingerprint to check.
+      log.warn(`pid file for ${server.name} predates fingerprinting - adopting pid ${pid} on trust`);
+    }
+
+    // Knowing what it launched with survives an ASMS restart, so a password
+    // changed in the meantime is still reported honestly.
+    if (identity?.trim()) launchedIdentity.set(server.id, identity.trim());
+    patchRuntime(server.id, { state: 'running', pid });
+    refreshIdentityDrift(server.id);
+    pushConsole(server.id, `Reattached to running server process (pid ${pid}).`, 'sys');
+    log.info(`adopted running server ${server.name} (pid ${pid})`);
+    // Rewrite so an old file gains a fingerprint for next time.
+    await writePid(server.id, pid);
   }
 }
 
@@ -1693,33 +1909,51 @@ let statsTimer: NodeJS.Timeout | null = null;
 let playerTimer: NodeJS.Timeout | null = null;
 let updateTimer: NodeJS.Timeout | null = null;
 
+/** Guards against a slow poll overlapping the next tick of the same loop. */
+let statsBusy = false;
+let playersBusy = false;
+
 function startLoops(): void {
   statsTimer = setInterval(async () => {
-    const all = runtimes_all();
-    const live = all.filter((r) => r.pid && (r.state === 'running' || r.state === 'starting'));
-    if (live.length) {
-      const stats = await sampleStats(live.map((r) => r.pid as number));
-      for (const rt of live) {
-        const s = stats.get(rt.pid as number);
-        if (s) patchRuntime(rt.id, { cpu: s.cpu, memMB: s.memMB });
-        else if (!isAlive(rt.pid)) patchRuntime(rt.id, { state: 'crashed', pid: null });
+    if (statsBusy) return;
+    statsBusy = true;
+    try {
+      const all = runtimes_all();
+      const live = all.filter((r) => r.pid && (r.state === 'running' || r.state === 'starting'));
+      if (live.length) {
+        const stats = await sampleStats(live.map((r) => r.pid as number));
+        for (const rt of live) {
+          const s = stats.get(rt.pid as number);
+          if (s) patchRuntime(rt.id, { cpu: s.cpu, memMB: s.memMB });
+          else if (!isAlive(rt.pid)) patchRuntime(rt.id, { state: 'crashed', pid: null });
+        }
       }
-    }
-    // Sample every server, running or not - a flat zero line is the honest
-    // shape for downtime, and it keeps every series on the same x-axis.
-    for (const rt of runtimes_all()) {
-      metrics.record(rt.id, { cpu: rt.cpu, memMB: rt.memMB, players: rt.players });
+      // Sample every server, running or not - a flat zero line is the honest
+      // shape for downtime, and it keeps every series on the same x-axis.
+      for (const rt of runtimes_all()) {
+        metrics.record(rt.id, { cpu: rt.cpu, memMB: rt.memMB, players: rt.players });
+      }
+    } catch (err) {
+      log.warn('stats sample failed', err);
+    } finally {
+      statsBusy = false;
     }
   }, 5000);
 
   playerTimer = setInterval(async () => {
-    for (const rt of runtimes_all()) {
-      if (rt.state !== 'running') continue;
-      try {
-        await refreshPlayers(rt.id);
-      } catch {
-        patchRuntime(rt.id, { rconConnected: false });
+    if (playersBusy) return;
+    playersBusy = true;
+    try {
+      for (const rt of runtimes_all()) {
+        if (rt.state !== 'running') continue;
+        try {
+          await refreshPlayers(rt.id);
+        } catch {
+          patchRuntime(rt.id, { rconConnected: false });
+        }
       }
+    } finally {
+      playersBusy = false;
     }
   }, 20_000);
 
@@ -1747,12 +1981,15 @@ export async function init(): Promise<void> {
       pushConsole(server.id, `Configuration problem: ${why}`, 'err');
       notice(
         'warn',
-        `${server.name} has an unusable password`,
-        'A question mark in a password or session name stops RCON and in-game admin from working. Fix it under Settings, then restart the server.',
+        `${server.name} has an unusable name or password`,
+        // Says what the check actually tests. It used to blame a question mark,
+        // which has been legal since passwords stopped travelling in the launch
+        // URL — sending people hunting for a character that was not the problem.
+        'A line break in a name or password splits it into two settings in GameUserSettings.ini, so everything after the break is lost. Fix it under Settings, then restart the server.',
       );
     }
   }
-  adoptOrphans();
+  await adoptOrphans();
   startLoops();
 
   // Deliberately not awaited: the dashboard has to be usable while a queue of
@@ -1797,11 +2034,13 @@ export async function shutdown(): Promise<void> {
   if (statsTimer) clearInterval(statsTimer);
   if (playerTimer) clearInterval(playerTimer);
   if (updateTimer) clearInterval(updateTimer);
+  for (const id of [...startWatchers.keys()]) stopStartWatcher(id);
   // Leave the game servers running; the pid files let us reattach on next boot.
   for (const [id] of procs) {
     const child = procs.get(id);
     child?.unref();
   }
+  shutdownProcTools();
 }
 
 export function sleep(ms: number): Promise<void> {

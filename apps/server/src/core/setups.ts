@@ -22,6 +22,7 @@ import * as config from './config.js';
 import * as servers from './servers.js';
 import * as scheduler from './scheduler.js';
 import { getPreset } from './presets.js';
+import { notFound } from '../api/errors.js';
 import type { LaunchFlags, ModEntry, SavedSetup, ScheduleAction, SetupBundle, SetupParts, SetupSchedule } from '../types.js';
 
 const log = logger('setups');
@@ -312,7 +313,7 @@ export function get(id: string): SavedSetup | undefined {
 
 export function need(id: string): SavedSetup {
   const setup = get(id);
-  if (!setup) throw new Error('That saved setup no longer exists');
+  if (!setup) throw notFound('That saved setup no longer exists');
   return setup;
 }
 
@@ -338,7 +339,7 @@ export function remove(id: string): void {
   const db = data();
   const before = db.setups.length;
   db.setups = db.setups.filter((s) => s.id !== id);
-  if (db.setups.length === before) throw new Error('That saved setup no longer exists');
+  if (db.setups.length === before) throw notFound('That saved setup no longer exists');
   save();
   bus.emitEvent('setup:changed', {});
 }

@@ -470,6 +470,14 @@ export const LAUNCH_FLAGS: Array<{
   },
   { key: 'exclusiveJoin', arg: '-exclusivejoin', label: 'Whitelist only', group: 'Players & joining', help: 'Only players on the whitelist may join.' },
   {
+    key: 'pcOnlyServer',
+    arg: '-ServerPlatform=PC',
+    label: 'PC-only server',
+    group: 'Players & joining',
+    help: 'Console players can no longer join — and CurseForge will hand over mods marked [PC Only], which it refuses to serve a cross-platform server. If a mod dies with "Mods not installed", this is usually the switch it wants.',
+    danger: true,
+  },
+  {
     key: 'noTransferFromFiltering',
     arg: '-NoTransferFromFiltering',
     label: 'No transfer filtering',

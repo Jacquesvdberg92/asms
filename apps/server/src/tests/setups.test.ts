@@ -7,9 +7,9 @@ import { PRESETS, getPreset, resolve, resolveById } from '../core/presets.js';
 import { SETTINGS } from '../core/catalog.js';
 import { readCurated, writeCurated, settingId, readRaw, writeRaw, syncIdentity } from '../core/config.js';
 import { scrubIni, validateBundle } from '../core/setups.js';
-import { READY_LINE, assertLaunchSafe, assertInstallPathSafe, buildLaunchPlan, defaultFlags, normaliseMods, installedMods, isModTrouble, modFailureMessage, reportMods } from '../core/servers.js';
+import { READY_LINE, assertLaunchSafe, assertInstallPathSafe, buildLaunchPlan, defaultFlags, normaliseMods, installedMods, isModTrouble, modFailureMessage, rejectedModIds, reportMods } from '../core/servers.js';
 import { INSTALL_PATH_LIMIT } from '../lib/paths.js';
-import type { ServerInstance, SetupBundle } from '../types.js';
+import type { ServerInstance } from '../types.js';
 
 const scratch = (): ServerInstance => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-setup-'));
@@ -510,9 +510,63 @@ test('mods: the failure message names the mod instead of blaming "a mod"', () =>
 });
 
 test('mods: ARK\u2019s own complaints are recognised, ordinary log noise is not', () => {
-  assert.ok(isModTrouble('[2026.08.31-16.02.11:993][  0]Unable to create a directory C:\ASA\...'));
+  assert.ok(isModTrouble(String.raw`[2026.08.31-16.02.11:993][  0]Unable to create a directory C:\ASA\...`));
   assert.ok(isModTrouble('Requested mods failed to load on server'));
   assert.ok(isModTrouble('LogMods: Error: Mod 941697 failed to download after 3 attempts'));
   assert.ok(!isModTrouble('LogMods: Mounting mod 929800'));
   assert.ok(!isModTrouble('Full startup: 42.11 seconds (BP compile: 0.00 seconds)'));
+});
+
+test('mods: an id ARK refused is told apart from one that merely failed to arrive', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-modrefused-'));
+  const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods', '83374');
+  fs.mkdirSync(path.join(modsDir, '929800_7739804'), { recursive: true });
+  fs.writeFileSync(path.join(modsDir, '929800_7739804', 'mod.pak'), 'x'.repeat(2048));
+
+  const server = modServer(dir, [
+    { id: '929800', name: 'TG Stacking' },
+    { id: '893657', name: 'Awesome SpyGlass!' },
+    { id: '999999', name: 'Just Missing' },
+  ]);
+
+  // The four lines ARK actually writes when CurseForge serves it nothing.
+  const evidence = [
+    'ASAMods: Error: Not all mods were installed. Check the log for CFCore errors.',
+    'If you have any Custom Cosmetics in the mod list please remove them.',
+    'Attempting to install pc-only mods on a cross-platform server will also fail to install.',
+    'Mods not installed: 893657',
+  ];
+  for (const line of evidence) assert.ok(isModTrouble(line), `not recognised: ${line}`);
+  assert.deepEqual(rejectedModIds(evidence), ['893657']);
+
+  const diagnosis = reportMods(server, true, evidence);
+  const report = new Map(diagnosis.mods.map((m) => [m.id, m]));
+  assert.equal(report.get('929800')?.status, 'ok');
+  assert.equal(report.get('893657')?.status, 'rejected', 'ARK named this one, so it is not just missing');
+  assert.equal(report.get('999999')?.status, 'missing', 'a mod ARK said nothing about stays missing');
+
+  // The whole point: it must not send someone off to re-download for twenty
+  // minutes when the mod was never CurseForge's to hand over.
+  assert.match(diagnosis.verdict, /Awesome SpyGlass! \(893657\)/);
+  assert.ok(diagnosis.advice.some((line) => line.includes('curseforge.com/projects/893657')), 'it says how to check the id');
+  assert.ok(diagnosis.advice.some((line) => /PC Only/i.test(line)), 'it names the switch that fixes a PC-only mod');
+  assert.ok(!diagnosis.advice.some((line) => /Press Download mods now/.test(line)), 'it does not promise a retry that cannot work');
+});
+
+test('mods: a rejected id sitting in a stale log is ignored once the mod is on disk', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-modrefixed-'));
+  const modsDir = path.join(dir, 'ShooterGame', 'Binaries', 'Win64', 'ShooterGame', 'Mods', '83374');
+  fs.mkdirSync(path.join(modsDir, '893657_1234567'), { recursive: true });
+  fs.writeFileSync(path.join(modsDir, '893657_1234567', 'mod.pak'), 'x'.repeat(2048));
+
+  const server = modServer(dir, [{ id: '893657', name: 'Awesome SpyGlass!' }]);
+  const report = new Map(reportMods(server, false, ['Mods not installed: 893657']).mods.map((m) => [m.id, m]));
+  assert.equal(report.get('893657')?.status, 'ok');
+});
+
+test('mods: the PC-only switch reaches the command line', () => {
+  const server = modServer('C:/asa/t', []);
+  assert.ok(!buildLaunchPlan(server).args.includes('-ServerPlatform=PC'));
+  const pcOnly = { ...server, flags: { ...server.flags, pcOnlyServer: true } } as ServerInstance;
+  assert.ok(buildLaunchPlan(pcOnly).args.includes('-ServerPlatform=PC'));
 });

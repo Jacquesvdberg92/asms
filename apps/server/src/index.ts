@@ -4,10 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec } from 'node:child_process';
 import express from 'express';
-import cors from 'cors';
-import { load, settings, saveNow, listenConfig } from './lib/store.js';
+import { load, settings, saveNow, listenConfig, takeGeneratedPassword } from './lib/store.js';
 import { ensureDirs, WEB_DIST, DATA_DIR } from './lib/paths.js';
-import { logger } from './lib/log.js';
+import { logger, closeLog } from './lib/log.js';
 import { onShutdown } from './lib/lifecycle.js';
 import { createApi } from './api/index.js';
 import { attachWebsocket } from './ws.js';
@@ -50,15 +49,82 @@ function claimSingleInstance(): void {
   process.on('exit', release);
 }
 
+/**
+ * Bind the port, or explain why not.
+ *
+ * `listen` reports failure as an event, not as a rejected promise, so without
+ * this the await below never settled and the process died on a raw Node stack
+ * trace - for the single most likely first-run problem there is.
+ */
+function listen(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      server.off('listening', onListening);
+      if (err.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `Port ${port} is already in use, so ASMS cannot start. Something else is on it - another copy of ASMS, or another program. Close it, or set a different port under Settings - Access (or with ASMS_PORT).`,
+          ),
+        );
+      } else if (err.code === 'EADDRNOTAVAIL') {
+        reject(
+          new Error(
+            `This machine has no address ${host}, so ASMS cannot listen on it. Set the listen address back to 0.0.0.0 under Settings - Access (or with ASMS_HOST).`,
+          ),
+        );
+      } else if (err.code === 'EACCES') {
+        reject(new Error(`Not allowed to listen on port ${port}. Ports below 1024 need administrator rights - pick a higher one.`));
+      } else {
+        reject(err);
+      }
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, host);
+  });
+}
+
 async function main(): Promise<void> {
   ensureDirs();
   claimSingleInstance();
-  load();
+
+  /**
+   * Registered before anything else can fail. An uncaught exception means the
+   * process is in a state Node itself does not trust; carrying on regardless is
+   * how a half-written asms.json happens. Flush what we have and let start.cmd
+   * or Docker bring us back.
+   */
+  process.on('uncaughtException', (err) => {
+    log.error('uncaught exception - shutting down', err);
+    try {
+      saveNow();
+    } catch {
+      /* nothing more we can do */
+    }
+    closeLog();
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (err) => log.error('unhandled rejection', err));
+
+  await load();
   backups.reconcile();
 
   const app = express();
   app.disable('x-powered-by');
-  app.use(cors());
+  /**
+   * No CORS middleware, deliberately.
+   *
+   * The dashboard is served from this same origin, so it never needed one. A
+   * bare `cors()` answered every route with `Access-Control-Allow-Origin: *`,
+   * which meant any page in any tab could call this API and read the reply -
+   * enumerate servers, read admin passwords out of /api/state, stop or delete
+   * things. It also made "bind to 127.0.0.1" no protection at all, because the
+   * attacking page runs on this machine too.
+   */
   app.use(express.json({ limit: '8mb' }));
   app.use('/api', createApi());
 
@@ -85,12 +151,23 @@ async function main(): Promise<void> {
   const server = http.createServer(app);
   attachWebsocket(server);
 
-  await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  await listen(server, port, host);
+  // From here on a socket error is not fatal; log it rather than let it throw.
+  server.on('error', (err) => log.error('http server error', err));
 
   log.info(`ASMS listening on http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
   log.info(`data directory: ${DATA_DIR}`);
   for (const url of lanUrls(port)) log.info(`reachable at ${url}`);
-  if (!cfg.password) {
+
+  const generated = takeGeneratedPassword();
+  if (generated) {
+    // Printed once, and only once: it is a hash from here on. Loud, because it
+    // is the only time anybody will see it.
+    log.warn('─'.repeat(64));
+    log.warn(`ASMS set a dashboard password for you:   ${generated}`);
+    log.warn('Write it down. Change or clear it under Settings - Access.');
+    log.warn('─'.repeat(64));
+  } else if (!cfg.passwordHash) {
     log.warn('No UI password set. Anyone on your network can control these servers - set one under Settings.');
   }
 
@@ -102,11 +179,15 @@ async function main(): Promise<void> {
     openBrowser(`http://localhost:${port}`);
   }
 
+  let stopping = false;
   const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
     log.info(`${signal} received - shutting ASMS down (game servers keep running)`);
     scheduler.stop();
     await servers.shutdown();
     saveNow();
+    closeLog();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };
@@ -114,8 +195,6 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   // The Restart button on the Settings page wants exactly this sequence.
   onShutdown((reason) => shutdown(reason));
-  process.on('uncaughtException', (err) => log.error('uncaught exception', err));
-  process.on('unhandledRejection', (err) => log.error('unhandled rejection', err));
 }
 
 function lanUrls(port: number): string[] {
@@ -135,6 +214,8 @@ function openBrowser(url: string): void {
 }
 
 void main().catch((err) => {
-  log.error('failed to start', err);
+  // A startup failure is the one place a bare message beats a stack trace: it
+  // is almost always a port or a folder, and the message above says which.
+  log.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

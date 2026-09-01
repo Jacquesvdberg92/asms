@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore, useAction } from '../../lib/store';
 import { api } from '../../lib/api';
@@ -86,21 +86,26 @@ function GameSettings({
     if (find) setSearch(find);
   }, [find]);
 
-  const load = () =>
-    void run(async () => {
-      const res = await api.get<{ curated: Record<string, string> }>(`/servers/${server.id}/config`);
-      setValues(res.curated);
-      setOriginal(res.curated);
-    });
+  const load = useCallback(
+    () =>
+      void run(async () => {
+        const res = await api.get<{ curated: Record<string, string> }>(`/servers/${server.id}/config`);
+        setValues(res.curated);
+        setOriginal(res.curated);
+      }),
+    [server.id, run],
+  );
 
-  useEffect(load, [server.id]);
+  useEffect(() => load(), [load]);
 
   const dirty = useMemo(
     () => Object.keys(values).filter((k) => values[k] !== original[k]),
     [values, original],
   );
 
-  const defs = catalog?.settings ?? [];
+  // Memoised because it feeds the `visible` memo below: a fresh [] on every
+  // render would make that recompute every time regardless of the real inputs.
+  const defs = useMemo(() => catalog?.settings ?? [], [catalog]);
   const flagHits = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return [];
@@ -561,14 +566,18 @@ function RawIni({ server }: { server: ServerInstance }) {
   const [files, setFiles] = useState<Record<string, { path: string; text: string }>>({});
   const [text, setText] = useState('');
 
-  const load = () =>
-    void run(async () => {
-      const res = await api.get<{ files: Record<string, { path: string; text: string }> }>(`/servers/${server.id}/config`);
-      setFiles(res.files);
-      setText(res.files[which]?.text ?? '');
-    });
+  const load = useCallback(
+    () =>
+      void run(async () => {
+        const res = await api.get<{ files: Record<string, { path: string; text: string }> }>(`/servers/${server.id}/config`);
+        setFiles(res.files);
+        // The effect below syncs the textarea from `files`, so setting the text
+        // here as well would race it — and lose an edit made while it loaded.
+      }),
+    [server.id, run],
+  );
 
-  useEffect(load, [server.id]);
+  useEffect(() => load(), [load]);
   useEffect(() => setText(files[which]?.text ?? ''), [which, files]);
 
   const dirty = text !== (files[which]?.text ?? '');

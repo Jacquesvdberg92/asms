@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, useAction } from '../lib/store';
-import { api, downloadUrl } from '../lib/api';
+import { api, download } from '../lib/api';
 import { TopBar } from '../components/Shell';
 import { Button, Badge, Confirm, Empty, Field, Modal, Toggle, Callout, SearchInput } from '../components/ui';
 import { Icon } from '../components/Icons';
@@ -167,9 +167,9 @@ function SetupCard({
         <Button size="sm" variant="primary" onClick={onApply}>
           <Icon.Check size={13} /> Apply to…
         </Button>
-        <a className="btn btn-sm" href={downloadUrl(`/setups/${setup.id}/download`)}>
+        <button className="btn btn-sm" onClick={() => void download(`/setups/${setup.id}/download`)}>
           <Icon.Download size={13} /> Download
-        </a>
+        </button>
         <Button size="sm" variant="ghost" onClick={onRename}>
           Rename
         </Button>

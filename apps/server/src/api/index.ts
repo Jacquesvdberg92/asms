@@ -2,7 +2,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { data, save, settings, listenConfig } from '../lib/store.js';
+import { data, saveNow, settings, listenConfig } from '../lib/store.js';
 import { ark, checkInstallPath, ASA_APP_ID, DATA_DIR } from '../lib/paths.js';
 import { addFirewallRules, isPortFree, findFreePort } from '../lib/proc.js';
 import { ensureSteamCmd, isSteamCmdInstalled, steamCmdPath, latestBuildId } from '../lib/steamcmd.js';
@@ -19,8 +19,14 @@ import * as library from '../core/library.js';
 import * as presets from '../core/presets.js';
 import * as updates from '../core/updates.js';
 import { MAPS, SETTINGS, SETTING_GROUPS, RCON_COMMANDS, LAUNCH_FLAGS, LAUNCH_FLAG_GROUPS, ACTIVE_EVENTS } from '../core/catalog.js';
-import { authRequired, guard, login, logout, revokeAll, tokenFrom } from './auth.js';
-import type { AppSettings } from '../types.js';
+import { authRequired, guard, login, logout, revokeAll, tokenFrom, issueTicket, loginBlockedFor } from './auth.js';
+import { applySettingsPatch, publicSettings } from '../core/settings.js';
+import { sendTest } from '../lib/notify.js';
+import { setSettings } from '../lib/store.js';
+import { logger } from '../lib/log.js';
+import { HttpError, badRequest, notFound, tooManyRequests } from './errors.js';
+
+const log = logger('api');
 
 type Handler = (req: Request, res: Response) => Promise<unknown> | unknown;
 
@@ -29,6 +35,11 @@ type Handler = (req: Request, res: Response) => Promise<unknown> | unknown;
  * a JSON error body instead of a stack trace in the browser. Handlers that
  * write the response themselves (downloads, explicit status codes) just return
  * undefined or the Response, and are left alone.
+ *
+ * An HttpError carries its own status and message. Anything else is a bug, so
+ * it is logged in full here and answered with something generic - the message
+ * of an unexpected error is as likely to be a filesystem path as it is to be
+ * useful.
  */
 const wrap =
   (fn: Handler) =>
@@ -39,9 +50,19 @@ const wrap =
         res.json(result);
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!res.headersSent) res.status(400).json({ error: message });
-        else next(err);
+        if (res.headersSent) return next(err);
+        if (err instanceof HttpError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        // Errors thrown by the core modules are written for people, so they are
+        // still worth showing - they just do not get to claim a status.
+        if (err instanceof Error && err.name === 'Error') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        log.error(`${req.method} ${req.path} failed`, err);
+        res.status(500).json({ error: 'Something went wrong inside ASMS. The details are in the log.' });
       });
   };
 
@@ -56,11 +77,35 @@ export function createApi(): Router {
 
   api.post(
     '/auth/login',
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       if (!authRequired()) return res.json({ token: null, required: false });
-      const token = login(String(req.body?.password ?? ''));
+      // Guessing is slowed down here rather than left to run at LAN speed.
+      const wait = loginBlockedFor(req);
+      if (wait > 0) {
+        throw tooManyRequests(
+          `Too many failed sign-ins. Try again in ${Math.ceil(wait / 1000)} second${wait >= 2000 ? 's' : ''}.`,
+        );
+      }
+      const token = await login(req, String(req.body?.password ?? ''));
       if (!token) return res.status(401).json({ error: 'Wrong password' });
       return res.json({ token, required: true });
+    }),
+  );
+
+  /**
+   * A one-shot ticket for a download.
+   *
+   * Downloads are plain navigations, which cannot carry an Authorization
+   * header. They used to carry the session token in the query string instead,
+   * where it lands in access logs, browser history and any reverse proxy in the
+   * way. A ticket is good for one path, once, for a minute.
+   */
+  api.post(
+    '/auth/ticket',
+    wrap(async (req) => {
+      const path = String(req.body?.path ?? '');
+      if (!path.startsWith('/')) throw badRequest('A ticket needs the path it is for.');
+      return { ticket: issueTicket(path) };
     }),
   );
 
@@ -87,7 +132,7 @@ export function createApi(): Router {
   // ----------------------------------------------------------------- state
   api.get('/state', (_req, res) => {
     res.json({
-      settings: data().settings,
+      settings: publicSettings(data().settings),
       servers: servers.list(),
       runtimes: servers.runtimes_all(),
       schedules: scheduler.list(),
@@ -193,19 +238,33 @@ export function createApi(): Router {
     }),
   );
 
-  api.get('/settings', (_req, res) => res.json(data().settings));
+  api.get('/settings', (_req, res) => res.json(publicSettings(data().settings)));
 
+  /**
+   * This used to be `Object.assign(current, req.body)` with no validation of
+   * any kind, so `{"password": 12345}` was saved to disk and then threw out of
+   * authRequired() on every request from the next boot on - a permanent 500 on
+   * every route, sign-in included. Every field is rebuilt with a typed clamp.
+   */
   api.put(
     '/settings',
     wrap(async (req) => {
-      const patch = req.body as Partial<AppSettings>;
-      const current = data().settings;
-      const passwordChanged = patch.password !== undefined && patch.password !== current.password;
-      Object.assign(current, patch);
-      save();
+      const { settings: next, passwordChanged } = await applySettingsPatch(data().settings, req.body);
+      setSettings(next);
+      saveNow();
       if (passwordChanged) revokeAll();
       servers.scheduleUpdateCheck();
-      return { ...current, sessionsRevoked: passwordChanged };
+      return { ...publicSettings(next), sessionsRevoked: passwordChanged };
+    }),
+  );
+
+  /** Post to the configured webhook now, so a bad URL is found today. */
+  api.post(
+    '/settings/test-webhook',
+    wrap(async (req) => {
+      const url = typeof req.body?.webhook === 'string' ? req.body.webhook : data().settings.discordWebhook;
+      await sendTest(url, 'Test message from ASMS. Notifications are working.');
+      return { ok: true };
     }),
   );
 
@@ -517,7 +576,7 @@ export function createApi(): Router {
     wrap(async (req, res) => {
       const file = String(req.query.file ?? 'ShooterGame.log');
       const target = logs.fullPath(req.params.id, file, logSource(req));
-      if (!fs.existsSync(target)) throw new Error('That log file no longer exists');
+      if (!fs.existsSync(target)) throw notFound('That log file no longer exists');
       return res.download(target, path.basename(target));
     }),
   );
@@ -553,7 +612,7 @@ export function createApi(): Router {
     '/backups/:id/download',
     wrap(async (req, res) => {
       const entry = backups.get(req.params.id);
-      if (!entry || !fs.existsSync(entry.file)) throw new Error('That backup file is gone');
+      if (!entry || !fs.existsSync(entry.file)) throw notFound('That backup file is gone');
       return res.download(entry.file, path.basename(entry.file));
     }),
   );

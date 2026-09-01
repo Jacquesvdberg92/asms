@@ -2,10 +2,11 @@ import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { bus } from './lib/bus.js';
 import { logger } from './lib/log.js';
-import { isValid } from './api/auth.js';
+import { redeemTicket } from './api/auth.js';
 import * as servers from './core/servers.js';
 import * as scheduler from './core/scheduler.js';
 import { data } from './lib/store.js';
+import { publicSettings } from './core/settings.js';
 
 const log = logger('ws');
 
@@ -19,8 +20,14 @@ export function attachWebsocket(http: Server): WebSocketServer {
   http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws') return;
-    const token = url.searchParams.get('token') ?? undefined;
-    if (!isValid(token)) {
+    /**
+     * A browser cannot put an Authorization header on a WebSocket handshake, so
+     * this takes a one-shot ticket instead of the session token - the token in
+     * a URL ends up in access logs and browser history, and this URL is opened
+     * on every reconnect.
+     */
+    const ticket = url.searchParams.get('ticket') ?? undefined;
+    if (!redeemTicket(ticket, '/ws')) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
@@ -37,17 +44,32 @@ export function attachWebsocket(http: Server): WebSocketServer {
       servers: servers.list(),
       runtimes: servers.runtimes_all(),
       schedules: scheduler.list(),
-      settings: data().settings,
+      settings: publicSettings(data().settings),
     });
 
+    /**
+     * A ping nobody answers means the far end is gone without having closed -
+     * a laptop lid, a dropped wifi link. Without the pong check those sockets
+     * accumulate and every broadcast writes into them forever.
+     */
+    let alive = true;
+    client.on('pong', () => {
+      alive = true;
+    });
     const ping = setInterval(() => {
-      if (client.readyState === WebSocket.OPEN) client.ping();
+      if (client.readyState !== WebSocket.OPEN) return;
+      if (!alive) {
+        client.terminate();
+        return;
+      }
+      alive = false;
+      client.ping();
     }, 30_000);
 
     client.on('message', (raw) => {
       try {
         const msg = JSON.parse(String(raw)) as { type: string; payload?: { id?: string } };
-        if (msg.type === 'console:subscribe' && msg.payload?.id) {
+        if (msg.type === 'console:subscribe' && typeof msg.payload?.id === 'string') {
           send(client, 'console:backlog', { id: msg.payload.id, lines: servers.consoleLines(msg.payload.id) });
         }
       } catch {

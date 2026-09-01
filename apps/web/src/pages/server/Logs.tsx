@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAction } from '../../lib/store';
-import { api, downloadUrl } from '../../lib/api';
+import { useStore } from '../../lib/store';
+import { api, download } from '../../lib/api';
 import { Button, Empty, Toggle, Badge, SearchInput } from '../../components/ui';
 import { Tooltip, Help } from '../../components/Tooltip';
 import { Icon } from '../../components/Icons';
@@ -22,7 +22,11 @@ function severityOf(line: string): Severity {
 const MAX_RENDERED = 3000;
 
 export default function Logs({ server }: { server: ServerInstance }) {
-  const [, run] = useAction();
+  const { runtimeOf } = useStore();
+  // A stopped server's log cannot change, so there is nothing to poll for.
+  const state = runtimeOf(server.id)?.state ?? 'stopped';
+  const live = state === 'running' || state === 'starting' || state === 'stopping' || state === 'updating' || state === 'installing';
+  const lastPoll = useRef(0);
   const [source, setSource] = useState<Source>('server');
   const [files, setFiles] = useState<LogFileInfo[]>([]);
   const [active, setActive] = useState('');
@@ -53,9 +57,12 @@ export default function Logs({ server }: { server: ServerInstance }) {
 
   useEffect(() => loadFiles(source), [loadFiles, source]);
 
-  // Pick up newly created log files without a manual refresh.
+  // Pick up newly created log files without a manual refresh. Paused while the
+  // tab is hidden — a backgrounded dashboard has nobody to show them to.
   useEffect(() => {
-    const t = setInterval(() => loadFiles(source), 20_000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') loadFiles(source);
+    }, 20_000);
     return () => clearInterval(t);
   }, [loadFiles, source]);
 
@@ -81,12 +88,28 @@ export default function Logs({ server }: { server: ServerInstance }) {
     };
 
     void poll();
-    const timer = setInterval(() => void poll(), 3000);
+    /**
+     * Every three seconds costs a stat and a read on a file that may be
+     * gigabytes. Skipped while the tab is hidden, and slowed right down when the
+     * server is not running — a stopped server's log cannot change.
+     */
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (!live && Date.now() - lastPoll.current < 30_000) return;
+      lastPoll.current = Date.now();
+      void poll();
+    }, 3000);
+    // Catch up the moment the tab comes back rather than waiting for the timer.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [server.id, active, source]);
+  }, [server.id, active, source, live]);
 
   // --- follow --------------------------------------------------------------
   useEffect(() => {
@@ -190,9 +213,9 @@ export default function Logs({ server }: { server: ServerInstance }) {
           </Tooltip>
           {currentFile ? (
             <Tooltip title="Download this log" body="Saves the whole file, not just the tail on screen — handy for sharing when asking for help.">
-              <a className="btn btn-sm btn-ghost" href={downloadUrl(`/servers/${server.id}/logs/download?source=${source}&file=${encodeURIComponent(active)}`)}>
+              <button className="btn btn-sm btn-ghost" onClick={() => void download(`/servers/${server.id}/logs/download?source=${source}&file=${encodeURIComponent(active)}`)}>
                 <Icon.Download size={13} /> Download
-              </a>
+              </button>
             </Tooltip>
           ) : null}
         </div>
