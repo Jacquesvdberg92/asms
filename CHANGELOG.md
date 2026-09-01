@@ -77,6 +77,10 @@ changes what happens when something goes wrong.
   session token in a URL, where it lands in access logs and browser history
 - Backup restore refuses any archive entry that would write outside the
   destination
+- A malformed or oversized request body no longer answers with an HTML stack
+  trace carrying the filesystem paths of the install. `express.json()` rejects
+  the body before the router is reached, so the router's own error handling
+  never saw it; `/api` now has the last word and replies in JSON
 
 ### Fixed
 
@@ -136,6 +140,30 @@ changes what happens when something goes wrong.
   an update would bring, not just a commit count
 - The dashboard says "Cannot reach ASMS" instead of spinning forever when the
   server is not answering
+
+### Verified
+
+Beyond the 109 unit tests, this release was exercised against a running ASMS:
+
+- **A 2.11 GB world, 603 files, backed up and restored under a 470 MB heap
+  cap.** Peak RSS 231 MB, and every file came back byte-for-byte. The old
+  in-memory writer would have needed several gigabytes; this is the change with
+  the most to lose and it is now measured rather than assumed.
+- **The same 2 GB world over HTTP**, through the real endpoints: create a
+  server, write a curated setting and confirm it in the INI on disk, back up,
+  delete a 0.94 GB map file, restore it, then delete the server and confirm the
+  world was left alone. The ASMS process sat at 156 MB throughout.
+- **A real RCON conversation** over a socket: handshake, a reply reassembled
+  from two packets, player parsing, and a wrong password reported as an
+  authentication failure rather than "not listening".
+- **A scheduled backup firing on the clock** — the unattended path, end to end,
+  landing a zip on disk and recording `ok`.
+- **A 0.1.x database migrating**: it boots, the existing password still signs
+  in, and the file is rewritten hashed with every other setting preserved.
+
+Not covered: a live ARK server, a real SteamCMD run, and the Linux
+process-group kill, which needs a Linux host. CI builds the Docker image on
+every push.
 
 ## [0.1.0] — 2026-08-31
 

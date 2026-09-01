@@ -128,6 +128,31 @@ async function main(): Promise<void> {
   app.use(express.json({ limit: '8mb' }));
   app.use('/api', createApi());
 
+  /**
+   * The last word on any error under /api.
+   *
+   * express.json() rejects a malformed or oversized body before the router is
+   * ever reached, so the router's own handler never saw it - and Express's
+   * default reply is an HTML page carrying a stack trace and the filesystem
+   * paths of this install. A JSON API answers in JSON, and says only what the
+   * caller can act on.
+   */
+  app.use('/api', (err: Error & { status?: number; type?: string }, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    if (err?.type === 'entity.parse.failed') {
+      res.status(400).json({ error: 'That request body is not valid JSON.' });
+      return;
+    }
+    if (err?.type === 'entity.too.large') {
+      res.status(413).json({ error: 'That request is too large. The limit is 8 MB.' });
+      return;
+    }
+    log.error('unhandled API error', err);
+    res.status(err?.status && err.status < 500 ? err.status : 500).json({
+      error: 'Something went wrong inside ASMS. The details are in the log.',
+    });
+  });
+
   if (fs.existsSync(WEB_DIST)) {
     app.use(express.static(WEB_DIST, { index: false, maxAge: '1h' }));
     app.get('*', (req, res, next) => {
