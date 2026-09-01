@@ -2,9 +2,20 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
-## [Unreleased]
+## [0.2.1] — 2026-09-01
+
+Two ways a brand-new install could stop before it started: a first run that asked for a
+password nobody had been given, and a `start.cmd` that failed on npm's own error message
+when it was launched from inside the downloaded zip.
 
 ### Fixed
+- **`start.cmd` explains an unextracted zip instead of failing at `npm install`.** Windows
+  browses a zip as though it were a folder, and double-clicking `start.cmd` there copies out
+  that one file to a temp folder and runs it with nothing else beside it. All you saw was npm's
+  own complaint — `ENOENT ... asms-main.zip.4d7\asms-main\package.json` under "Something went
+  wrong during setup" — which says nothing about the actual mistake. start.cmd now checks that
+  `package.json` is next to it before doing anything, prints the folder it ran from, and says
+  to extract the zip first
 - **First run asks for a password instead of inventing one.** ASMS used to generate a password and
   print it to the console once. Anyone who started it from a shortcut, ran it as a service, or
   pulled a fresh copy from GitHub met a sign-in screen asking for a password that existed nowhere,

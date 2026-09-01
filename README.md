@@ -80,11 +80,15 @@ and pulls, reinstalls and rebuilds in place.
 ## Quick start
 
 1. Install [Node.js](https://nodejs.org) 20 or newer.
-2. Double-click **`start.cmd`**.
+2. Download the zip, then **right-click it and choose "Extract All..."** into somewhere
+   permanent such as `C:\ASMS`. Do not run anything from inside the zip — Windows shows a
+   zip as if it were a folder, but running a file from there copies out only that one file
+   and leaves the rest behind.
+3. Double-click **`start.cmd`** in the extracted folder.
    First run installs dependencies and builds the UI (about a minute), then opens
    <http://localhost:8787>.
-3. Click **Install SteamCMD** on the dashboard when prompted.
-4. Click **New server**, walk the four steps, and let it download the server files.
+4. Click **Install SteamCMD** on the dashboard when prompted.
+5. Click **New server**, walk the four steps, and let it download the server files.
 
 The dashboard shows a checklist that ticks itself off as you go, and there is a full
 **Setup guide** in the sidebar covering ports, firewall, mods, backups and what to do when
@@ -509,6 +513,13 @@ Worth knowing if you are changing things:
 ---
 
 ## Troubleshooting
+
+**`start.cmd` fails at `npm install` with "Could not read package.json"** and a path under
+`AppData\Local\Temp` containing `.zip` — start.cmd was run from inside the downloaded zip
+rather than from an extracted copy. Windows copied that one file to a temp folder on its own
+and left the other eighteen in the archive. Extract the zip properly — right-click, **Extract
+All...** — and run `start.cmd` from the extracted folder. Recent versions say this rather than
+handing you the npm error.
 
 **"Server files are not installed yet"** — run Install from the Overview tab. If SteamCMD fails
 partway, use **Verify integrity**, which re-checks every file.
