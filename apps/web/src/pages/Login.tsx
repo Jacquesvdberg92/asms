@@ -47,8 +47,8 @@ export default function Login() {
             Sign in
           </Button>
           <p className="tiny faint center">
-            Lost it? Stop ASMS, clear the <span className="mono">password</span> field in{' '}
-            <span className="mono">data/asms.json</span>, and start it again.
+            Lost it? Stop ASMS, empty the <span className="mono">passwordHash</span> field in{' '}
+            <span className="mono">data/asms.json</span>, and start it again — ASMS will ask you to set a new one.
           </p>
         </div>
       </form>

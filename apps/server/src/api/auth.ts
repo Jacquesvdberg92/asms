@@ -30,6 +30,20 @@ export function authRequired(): boolean {
   return String(settings().passwordHash ?? '').length > 0;
 }
 
+/**
+ * Nobody has answered the password question yet.
+ *
+ * ASMS used to invent a password on first run and print it to the console -
+ * which, for anyone who started it from a shortcut, closed the window, or ran
+ * it as a service, meant a sign-in screen asking for a password that existed
+ * nowhere. Now first run asks instead, and until it is answered the API is shut
+ * apart from the two routes that answer it: an install waiting to be set up is
+ * otherwise a remote control for the machine it is on.
+ */
+export function setupRequired(): boolean {
+  return !authRequired() && settings().signInDisabled !== true;
+}
+
 // -------------------------------------------------------------- rate limiting
 
 interface Attempts {
@@ -124,6 +138,8 @@ export function issueTicket(path: string): string {
 
 /** Spend a ticket. Returns the path it was issued for, or null. */
 export function redeemTicket(ticket: string | undefined, path: string): boolean {
+  // The websocket handshake calls this directly, without passing the guard.
+  if (setupRequired()) return false;
   if (!authRequired()) return true;
   if (!ticket) return false;
   const entry = tickets.get(ticket);
@@ -143,7 +159,15 @@ function sweepTickets(): void {
 /** Routes reachable without a session. */
 const OPEN_PATHS = new Set(['/auth/login', '/auth/status']);
 
+/** All that is reachable before the first-run question has been answered. */
+const SETUP_PATHS = new Set(['/auth/status', '/auth/setup']);
+
 export function guard(req: Request, res: Response, next: NextFunction): void {
+  if (setupRequired()) {
+    if (SETUP_PATHS.has(req.path)) return next();
+    res.status(401).json({ error: 'ASMS has not been set up yet. Open the dashboard to choose a password.' });
+    return;
+  }
   if (!authRequired()) return next();
   if (OPEN_PATHS.has(req.path)) return next();
 

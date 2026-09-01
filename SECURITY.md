@@ -12,9 +12,14 @@ to the machine's game servers.
 - **Default is local-only.** Out of the box ASMS binds to `127.0.0.1`, reachable only from the
   PC it runs on. This is the right setting if you never leave the desk. The Docker image binds
   `0.0.0.0` inside the container and publishes on `127.0.0.1`, which comes to the same thing.
-- **A password is set for you on first run.** ASMS generates one, prints it to the console once,
-  and stores only a scrypt hash of it. Change it or clear it under **Settings → Access**.
-  Clearing it switches sign-in off entirely, which is yours to choose.
+- **The first run asks for a password.** Until it is answered every route except that question
+  answers 401, so a fresh install is not a remote control for the machine while it waits. Only a
+  scrypt hash of what you pick is stored. Change it or clear it later under **Settings → Access**;
+  clearing it switches sign-in off entirely, which is yours to choose. Containers can set
+  `ASMS_PASSWORD`, or `ASMS_NO_PASSWORD=1` to run open on purpose, since nobody is at a browser
+  during `docker compose up -d`.
+- **Forgotten it?** Stop ASMS, empty the `passwordHash` field in `data/asms.json`, start it again,
+  and it asks you to set a new one rather than coming back up open.
 - **Set a password before you widen it.** If you switch the bind address to `0.0.0.0` so you can
   manage servers from your phone, make sure a dashboard password is set first. ASMS will warn
   you, but it will not stop you.

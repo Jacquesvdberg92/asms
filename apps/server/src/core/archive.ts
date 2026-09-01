@@ -326,6 +326,12 @@ function settingsFromArchive(input: unknown, current: AppSettings): AppSettings 
   const merged = validateSettings(raw, current);
   const incoming = raw.passwordHash;
   merged.passwordHash = isHash(incoming) ? String(incoming) : '';
+  /**
+   * A restore that carries no password leaves sign-in switched off, as it
+   * always has - it does not drop the dashboard into first-run setup underneath
+   * whoever is doing the restoring, and the warning below says so out loud.
+   */
+  merged.signInDisabled = merged.passwordHash.length === 0;
   return merged;
 }
 

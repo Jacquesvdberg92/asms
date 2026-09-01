@@ -13,8 +13,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { hashPassword, verifyPassword, isHash, suggestPassword } from '../lib/password.js';
-import { validateSettings, publicSettings, applySettingsPatch } from '../core/settings.js';
+import { hashPassword, verifyPassword, isHash } from '../lib/password.js';
+import { validateSettings, publicSettings, applySettingsPatch, migrateSettings } from '../core/settings.js';
 import { validateCron, nextRun } from '../core/scheduler.js';
 import { checkWebhook } from '../lib/notify.js';
 import { writeZip, extractZip, walkFolder } from '../lib/zip.js';
@@ -29,6 +29,7 @@ const baseSettings = (): AppSettings => ({
   backupRoot: 'C:\\ASA\\backups',
   clusterRoot: 'C:\\ASA\\clusters',
   passwordHash: '',
+  signInDisabled: false,
   bindHost: '0.0.0.0',
   port: 8787,
   updateCheckInterval: 30,
@@ -139,11 +140,48 @@ test('password: a corrupt or hand-edited hash locks up rather than opening', asy
   }
 });
 
-test('password: a generated one is long enough to be worth having', () => {
-  const generated = suggestPassword();
-  assert.ok(generated.length >= 20);
-  assert.match(generated, /^[a-z0-9-]+$/, 'typeable on a phone');
-  assert.notEqual(generated, suggestPassword());
+// -------------------------------------------------------------- first-run setup
+
+/**
+ * The question ASMS asks on first run, and the flag that remembers the answer.
+ *
+ * It used to invent a password and print it to the console instead - so anyone
+ * who started ASMS from a shortcut, or pulled a fresh copy, met a sign-in
+ * screen asking for a password that existed nowhere.
+ */
+
+test('setup: a fresh database has not answered the password question', async () => {
+  const settings = await migrateSettings({}, baseSettings());
+  assert.equal(settings.passwordHash, '', 'nothing is invented on our behalf');
+  assert.equal(settings.signInDisabled, false, 'so first run asks');
+});
+
+test('setup: a database from before the flag is asked rather than left open', async () => {
+  // 0.2.0 wrote no signInDisabled. An empty password there is not evidence that
+  // anybody chose to run without one.
+  const settings = await migrateSettings({ passwordHash: '' }, baseSettings());
+  assert.equal(settings.signInDisabled, false);
+});
+
+test('setup: choosing no password is remembered, so it is only asked once', async () => {
+  const { settings } = await applySettingsPatch(baseSettings(), { password: '' });
+  assert.equal(settings.passwordHash, '');
+  assert.equal(settings.signInDisabled, true);
+  const reloaded = await migrateSettings({ ...settings }, baseSettings());
+  assert.equal(reloaded.signInDisabled, true, 'the choice survives a restart');
+});
+
+test('setup: setting a password answers the question too', async () => {
+  const { settings } = await applySettingsPatch(baseSettings(), { password: 'hunter2' });
+  assert.equal(settings.signInDisabled, false);
+  assert.equal(await verifyPassword('hunter2', settings.passwordHash), true);
+});
+
+test('setup: clearing the hash by hand is the way back in after a forgotten password', async () => {
+  const withPassword = { ...baseSettings(), passwordHash: await hashPassword('hunter2') };
+  // What the sign-in screen tells people to do: empty the field, restart.
+  const cleared = await migrateSettings({ ...withPassword, passwordHash: '' }, baseSettings());
+  assert.equal(cleared.signInDisabled, false, 'ASMS offers to set a new one instead of opening up');
 });
 
 // ----------------------------------------------------------------- scheduler

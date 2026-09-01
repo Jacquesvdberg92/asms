@@ -143,6 +143,8 @@ export interface AppSettings {
   clusterRoot: string;
   /** True when signing in is required. Read-only. */
   passwordSet: boolean;
+  /** True when running without a password was somebody's choice. Read-only. */
+  signInDisabled: boolean;
   bindHost: string;
   port: number;
   updateCheckInterval: number;
@@ -156,7 +158,7 @@ export interface AppSettings {
 }
 
 /** What a settings save may carry. `password` is only sent when it changed. */
-export type SettingsPatch = Partial<Omit<AppSettings, 'passwordSet'>> & { password?: string };
+export type SettingsPatch = Partial<Omit<AppSettings, 'passwordSet' | 'signInDisabled'>> & { password?: string };
 
 export interface MapDef {
   code: string;

@@ -17,6 +17,8 @@ import type {
 interface StateShape {
   ready: boolean;
   authRequired: boolean;
+  /** First run: nothing is set up, and nothing works until a password is chosen. */
+  setupRequired: boolean;
   signedIn: boolean;
   connected: boolean;
   /** ASMS itself is not answering — shown instead of an empty dashboard. */
@@ -37,6 +39,8 @@ interface StateShape {
 
 interface StoreValue extends StateShape {
   signIn: (password: string) => Promise<void>;
+  /** Answer the first-run question. An empty password means "no sign-in". */
+  completeSetup: (password: string) => Promise<void>;
   signOut: () => void;
   refresh: () => Promise<void>;
   refreshSystem: () => Promise<void>;
@@ -60,6 +64,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<StateShape>({
     ready: false,
     authRequired: false,
+    setupRequired: false,
     signedIn: false,
     connected: false,
     unreachable: false,
@@ -258,9 +263,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [pushConsole, toast, loadAll]);
 
   const boot = useCallback(async () => {
-    let required = false;
+    let status = { required: false, setupRequired: false };
     try {
-      ({ required } = await api.get<{ required: boolean }>('/auth/status'));
+      status = await api.get<{ required: boolean; setupRequired: boolean }>('/auth/status');
     } catch {
       // ASMS is not answering. Say so rather than spinning on "Starting ASMS…"
       // forever, and try again — it may still be coming up.
@@ -269,6 +274,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     setState((s) => ({ ...s, unreachable: false }));
+    // Nothing else is worth asking for: every other route answers 401 until the
+    // password question has been answered.
+    if (status.setupRequired) {
+      setState((s) => ({ ...s, ready: true, setupRequired: true, authRequired: false, signedIn: false }));
+      return;
+    }
+    const required = status.required;
+    setState((s) => ({ ...s, setupRequired: false }));
     if (required && !getToken()) {
       setState((s) => ({ ...s, ready: true, authRequired: true, signedIn: false }));
       return;
@@ -285,7 +298,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     void boot();
-    const onUnauthorized = () => setState((s) => ({ ...s, signedIn: false, authRequired: true }));
+    // Ask what changed rather than assuming a stale session: a password cleared
+    // out of asms.json puts ASMS back into first-run setup, not at a sign-in
+    // screen for a password that is no longer there.
+    const onUnauthorized = () => {
+      setState((s) => ({ ...s, signedIn: false, authRequired: true }));
+      void boot();
+    };
     window.addEventListener('asms:unauthorized', onUnauthorized);
     return () => window.removeEventListener('asms:unauthorized', onUnauthorized);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,6 +314,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async (password: string) => {
       const { token } = await api.post<{ token: string | null }>('/auth/login', { password });
       setToken(token);
+      await loadAll();
+      await refreshSystem();
+      await connectSocket();
+    },
+    [connectSocket, loadAll, refreshSystem],
+  );
+
+  const completeSetup = useCallback(
+    async (password: string) => {
+      const { token } = await api.post<{ token: string | null }>('/auth/setup', { password });
+      setToken(token);
+      setState((s) => ({ ...s, setupRequired: false, authRequired: Boolean(token) }));
       await loadAll();
       await refreshSystem();
       await connectSocket();
@@ -313,6 +344,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...state,
       signIn,
+      completeSetup,
       signOut,
       refresh: loadAll,
       refreshSystem,
@@ -336,7 +368,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         return () => set.delete(fn);
       },
     }),
-    [state, signIn, signOut, loadAll, refreshSystem, toast, dismissToast],
+    [state, signIn, completeSetup, signOut, loadAll, refreshSystem, toast, dismissToast],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

@@ -3,6 +3,7 @@ import { Navigate, Outlet, RouterProvider, createBrowserRouter } from 'react-rou
 import { useStore } from './lib/store';
 import { Shell } from './components/Shell';
 import Login from './pages/Login';
+import Setup from './pages/Setup';
 import Dashboard from './pages/Dashboard';
 import NewServer from './pages/NewServer';
 import ServerDetail from './pages/ServerDetail';
@@ -50,7 +51,7 @@ function Layout() {
 }
 
 export default function App() {
-  const { ready, authRequired, signedIn, unreachable, settings, toasts, dismissToast } = useStore();
+  const { ready, authRequired, setupRequired, signedIn, unreachable, settings, toasts, dismissToast } = useStore();
 
   // Applied as an effect rather than during render: writing to the DOM in a
   // render body runs twice under StrictMode and fights concurrent rendering.
@@ -81,6 +82,17 @@ export default function App() {
           </p>
         </div>
       </div>
+    );
+  }
+
+  // First run, before anything else: the rest of the API answers 401 until the
+  // password question is answered, so there is nothing else to show.
+  if (setupRequired) {
+    return (
+      <>
+        <Setup />
+        <Toasts toasts={toasts} dismiss={dismissToast} />
+      </>
     );
   }
 

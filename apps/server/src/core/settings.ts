@@ -48,7 +48,8 @@ function bindHost(value: unknown, fallback: string): string {
  *
  * `passwordHash` is deliberately never taken from `input` here - a plaintext
  * password needs hashing, which is async, and the archive importer carries an
- * already-hashed value. Both are handled by their own callers.
+ * already-hashed value. Both are handled by their own callers. `signInDisabled`
+ * travels with it: it only ever changes when the password does.
  */
 export function validateSettings(input: unknown, current: AppSettings): AppSettings {
   const raw = (input ?? {}) as Record<string, unknown>;
@@ -59,6 +60,7 @@ export function validateSettings(input: unknown, current: AppSettings): AppSetti
     backupRoot: text(raw.backupRoot, current.backupRoot),
     clusterRoot: text(raw.clusterRoot, current.clusterRoot),
     passwordHash: current.passwordHash,
+    signInDisabled: current.signInDisabled,
     bindHost: bindHost(raw.bindHost, current.bindHost),
     port: int(raw.port, current.port, 1, 65535),
     updateCheckInterval: int(raw.updateCheckInterval, current.updateCheckInterval, 0, 1440),
@@ -113,10 +115,14 @@ export async function applySettingsPatch(current: AppSettings, patch: unknown): 
     if (!wanted) {
       passwordChanged = current.passwordHash.length > 0;
       next.passwordHash = '';
+      // Somebody typed nothing on purpose. Recorded, so the next start does not
+      // read an empty hash as "never been asked" and open the setup screen.
+      next.signInDisabled = true;
     } else if (wanted.length < 4) {
       throw new Error('A dashboard password needs at least 4 characters. Leave it empty to turn sign-in off entirely.');
     } else {
       next.passwordHash = await hashPassword(wanted);
+      next.signInDisabled = false;
       passwordChanged = true;
     }
   }
@@ -143,6 +149,14 @@ export async function migrateSettings(raw: Record<string, unknown>, base: AppSet
   } else {
     settings.passwordHash = '';
   }
+
+  /**
+   * A password that is set is an answered question. Without one, the flag says
+   * whether the emptiness was a choice; a database that predates the flag has
+   * no answer on file, so ASMS asks on the next start rather than assuming the
+   * dashboard was meant to be open.
+   */
+  settings.signInDisabled = settings.passwordHash.length > 0 ? false : bool(raw.signInDisabled, false);
 
   return settings;
 }

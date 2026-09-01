@@ -177,6 +177,16 @@ export interface AppSettings {
    * Never sent to a client — see core/settings.ts publicSettings().
    */
   passwordHash: string;
+  /**
+   * True once somebody has deliberately turned sign-in off — on the first-run
+   * screen, or by clearing the password under Settings → Access.
+   *
+   * An empty `passwordHash` with this false means nobody has been asked yet, so
+   * ASMS asks before it will show or do anything. That is also the way back in
+   * after a forgotten password: clear `passwordHash` in asms.json and the next
+   * start offers to set a new one.
+   */
+  signInDisabled: boolean;
   bindHost: string;
   port: number;
   /** minutes; 0 disables */
