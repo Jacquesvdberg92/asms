@@ -34,6 +34,10 @@ services:
       # can reach port 8787 controls your servers - always set one when the
       # container is reachable beyond your own machine.
       # ASMS_PASSWORD: "change-me"
+      # Set neither and the first person to open the dashboard is asked to pick
+      # a password; until then every other route answers 401. To run open on
+      # purpose - behind a proxy that already authenticates, say - say so:
+      # ASMS_NO_PASSWORD: "1"
       ASMS_ARK_ROOT: /ark
       # ARK's server binary is a Windows executable. To run it on Linux, mount
       # a Proton or Wine install and put its command here, for example:

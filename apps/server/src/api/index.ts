@@ -19,7 +19,17 @@ import * as library from '../core/library.js';
 import * as presets from '../core/presets.js';
 import * as updates from '../core/updates.js';
 import { MAPS, SETTINGS, SETTING_GROUPS, RCON_COMMANDS, LAUNCH_FLAGS, LAUNCH_FLAG_GROUPS, ACTIVE_EVENTS } from '../core/catalog.js';
-import { authRequired, guard, login, logout, revokeAll, tokenFrom, issueTicket, loginBlockedFor } from './auth.js';
+import {
+  authRequired,
+  setupRequired,
+  guard,
+  login,
+  logout,
+  revokeAll,
+  tokenFrom,
+  issueTicket,
+  loginBlockedFor,
+} from './auth.js';
 import { applySettingsPatch, publicSettings } from '../core/settings.js';
 import { sendTest } from '../lib/notify.js';
 import { setSettings } from '../lib/store.js';
@@ -72,8 +82,38 @@ export function createApi(): Router {
 
   // ------------------------------------------------------------------ auth
   api.get('/auth/status', (_req, res) => {
-    res.json({ required: authRequired() });
+    res.json({ required: authRequired(), setupRequired: setupRequired() });
   });
+
+  /**
+   * First run: choose a password, or say out loud that you do not want one.
+   *
+   * Open to anyone who can reach ASMS, and it has to be - there is nothing to
+   * sign in with yet. It only answers while nothing is set, which is why the
+   * guard keeps the rest of the API shut until it has been answered: the window
+   * where this is claimable is the window where the machine is exposed, so it
+   * lasts as long as it takes to open the dashboard, not as long as the install.
+   */
+  api.post(
+    '/auth/setup',
+    wrap(async (req, res) => {
+      if (!setupRequired()) {
+        throw badRequest('ASMS is already set up. Change the password under Settings → Access.');
+      }
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      const { settings: next } = await applySettingsPatch(settings(), { password });
+      setSettings(next);
+      saveNow();
+      revokeAll();
+      if (!password) {
+        log.warn('first run: sign-in left switched off - anyone who can reach ASMS can control these servers');
+        return res.json({ token: null, required: false });
+      }
+      log.info('first run: dashboard password set');
+      // Straight in, rather than bouncing somebody who just typed it twice.
+      return res.json({ token: await login(req, password), required: true });
+    }),
+  );
 
   api.post(
     '/auth/login',

@@ -4,11 +4,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec } from 'node:child_process';
 import express from 'express';
-import { load, settings, saveNow, listenConfig, takeGeneratedPassword } from './lib/store.js';
+import { load, settings, saveNow, listenConfig } from './lib/store.js';
 import { ensureDirs, WEB_DIST, DATA_DIR } from './lib/paths.js';
 import { logger, closeLog } from './lib/log.js';
 import { onShutdown } from './lib/lifecycle.js';
 import { createApi } from './api/index.js';
+import { setupRequired } from './api/auth.js';
 import { attachWebsocket } from './ws.js';
 import * as servers from './core/servers.js';
 import * as scheduler from './core/scheduler.js';
@@ -184,13 +185,13 @@ async function main(): Promise<void> {
   log.info(`data directory: ${DATA_DIR}`);
   for (const url of lanUrls(port)) log.info(`reachable at ${url}`);
 
-  const generated = takeGeneratedPassword();
-  if (generated) {
-    // Printed once, and only once: it is a hash from here on. Loud, because it
-    // is the only time anybody will see it.
+  if (setupRequired()) {
+    // Loud, because until this is answered the dashboard is the only thing
+    // ASMS will do - every other route answers 401.
     log.warn('─'.repeat(64));
-    log.warn(`ASMS set a dashboard password for you:   ${generated}`);
-    log.warn('Write it down. Change or clear it under Settings - Access.');
+    log.warn('First run: open ASMS and choose a dashboard password.');
+    log.warn(`  http://localhost:${port}`);
+    log.warn('Nothing else works until you do. You can also choose to run without one.');
     log.warn('─'.repeat(64));
   } else if (!cfg.passwordHash) {
     log.warn('No UI password set. Anyone on your network can control these servers - set one under Settings.');

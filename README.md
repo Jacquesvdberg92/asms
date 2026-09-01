@@ -404,7 +404,8 @@ the queue carries on.
 - **Custom address** — one specific network card, or behind a reverse proxy.
 
 **This PC only** is the default. Make sure a password is set before choosing either of the others —
-ASMS sets one for you on first run, so normally there is nothing to do. **Do not port-forward 8787.**
+ASMS asks you to pick one the first time you open it, so normally there is nothing to do. **Do not
+port-forward 8787.**
 If you want it from outside the house, put it behind a VPN such as Tailscale or WireGuard, or an
 authenticating HTTPS reverse proxy.
 
@@ -450,14 +451,17 @@ data elsewhere, set `ASMS_DATA` before starting.
 
 Environment overrides: `ASMS_PORT`, `ASMS_HOST`, `ASMS_DATA`, `ASMS_ARK_ROOT` (default parent of
 the server, backup and cluster folders), `ASMS_PASSWORD` (forced on every start — for containers),
-`ASMS_LAUNCH_WRAPPER`, `ASMS_NO_OPEN` (skip opening a browser), `ASMS_DEBUG`.
+`ASMS_NO_PASSWORD=1` (run with no sign-in and skip the first-run question — for a container behind
+something that already authenticates), `ASMS_LAUNCH_WRAPPER`, `ASMS_NO_OPEN` (skip opening a
+browser), `ASMS_DEBUG`.
 
 ---
 
 ## Security
 
-ASMS listens on `127.0.0.1:8787` — this PC only — and on first run it sets a dashboard password for
-you and prints it to the console once. Write that down. To reach ASMS from your phone, switch to
+ASMS listens on `127.0.0.1:8787` — this PC only — and the first time you open the dashboard it asks
+you to choose a password before it will do anything else. You can decline and run without one, which
+is reasonable while it is bound to this PC. To reach ASMS from your phone, switch to
 **Anything on my network** under Settings → Access; see
 [Reaching ASMS from your phone](#reaching-asms-from-your-phone) for the three listen modes.
 

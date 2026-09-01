@@ -74,18 +74,3 @@ export async function verifyPassword(password: string, stored: PasswordHash): Pr
 export function isHash(value: unknown): boolean {
   return typeof value === 'string' && /^scrypt\$\d+\$\d+\$\d+\$[^$]+\$[^$]+$/.test(value);
 }
-
-/**
- * A readable random password, used when ASMS sets one for you on first run.
- * No look-alike characters, because this gets typed on a phone.
- */
-export function suggestPassword(): string {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
-  const bytes = crypto.randomBytes(20);
-  let out = '';
-  for (let i = 0; i < 20; i += 1) {
-    if (i === 5 || i === 10 || i === 15) out += '-';
-    out += alphabet[bytes[i] % alphabet.length];
-  }
-  return out;
-}

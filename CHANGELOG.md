@@ -4,6 +4,21 @@ Notable changes to ASMS. Dates are the day the change landed.
 
 ## [Unreleased]
 
+### Fixed
+- **First run asks for a password instead of inventing one.** ASMS used to generate a password and
+  print it to the console once. Anyone who started it from a shortcut, ran it as a service, or
+  pulled a fresh copy from GitHub met a sign-in screen asking for a password that existed nowhere,
+  with hand-editing `data/asms.json` as the only way in. Now the first time the dashboard is opened
+  it asks you to choose one — or to say out loud that you want to run without one
+- Until that question is answered every route except it answers 401, so an install waiting to be
+  set up is not a remote control for the machine it is on
+- Forgetting the password now has a documented way back: empty the `passwordHash` field in
+  `data/asms.json`, restart, and ASMS offers to set a new one rather than coming back up open
+- A database that predates this — including one where the password was cleared by hand — is asked
+  the question once on the next start. Answering "no password" is remembered
+- `ASMS_NO_PASSWORD=1` for containers that are meant to run open, where nobody is at a browser to
+  answer. `ASMS_PASSWORD` is unchanged and still wins on every start
+
 ## [0.2.0] — 2026-09-01
 
 Two halves. The mod and quick-action work that had been sitting unreleased,

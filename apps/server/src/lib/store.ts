@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { DB_FILE, DATA_DIR, ROOT, STEAMCMD_DIR, ensureDirs } from './paths.js';
 import type { AppSettings, DbShape } from '../types.js';
-import { hashPassword, suggestPassword } from './password.js';
+import { hashPassword } from './password.js';
 import { migrateSettings } from '../core/settings.js';
 import { logger } from './log.js';
 
@@ -25,6 +25,7 @@ function defaultSettings(): AppSettings {
     backupRoot: path.join(base, 'backups'),
     clusterRoot: path.join(base, 'clusters'),
     passwordHash: '',
+    signInDisabled: false,
     /**
      * Local-only until somebody chooses otherwise, which is what SECURITY.md
      * has always promised and what the code did not do. Settings → Access
@@ -44,6 +45,11 @@ function defaultSettings(): AppSettings {
   };
 }
 
+/** An environment flag as people actually write them: 1, true, yes, on. */
+function yes(value: string | undefined): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
 function defaults(): DbShape {
   return {
     version: 2,
@@ -58,18 +64,6 @@ function defaults(): DbShape {
 
 let db: DbShape = defaults();
 let writeTimer: NodeJS.Timeout | null = null;
-
-/**
- * A password ASMS generated for you because none was set. Held only long enough
- * for index.ts to print it once - it is a hash from then on, and unrecoverable.
- */
-let generatedPassword: string | null = null;
-
-export function takeGeneratedPassword(): string | null {
-  const value = generatedPassword;
-  generatedPassword = null;
-  return value;
-}
 
 export async function load(): Promise<DbShape> {
   ensureDirs();
@@ -123,16 +117,19 @@ export async function load(): Promise<DbShape> {
   // set it wins on every start, so the compose file stays the source of truth.
   if (process.env.ASMS_PASSWORD) {
     db.settings.passwordHash = await hashPassword(process.env.ASMS_PASSWORD);
-  } else if (!existed && !db.settings.passwordHash) {
+    db.settings.signInDisabled = false;
+  } else if (yes(process.env.ASMS_NO_PASSWORD)) {
     /**
-     * First run with nothing configured. ASMS used to start wide open on
-     * 0.0.0.0 with no sign-in and only a line in the log about it - which
-     * nobody running it detached ever saw. Now it picks one, prints it, and
-     * the owner can clear it in Settings if they genuinely want it open.
+     * Deliberately open - a container behind an authenticating proxy, or a box
+     * nobody else can reach. Set here rather than asked for, because there is
+     * nobody at a browser during `docker compose up -d`.
      */
-    generatedPassword = suggestPassword();
-    db.settings.passwordHash = await hashPassword(generatedPassword);
+    db.settings.signInDisabled = true;
   }
+  // Anything else with no password is a first run nobody has answered yet:
+  // signInDisabled stays false, and the API stays shut until the browser asks
+  // for a password. ASMS used to invent one and print it to a console that,
+  // started from a shortcut or a service, nobody ever read.
 
   /**
    * Write back immediately when the file on disk is an older shape.
