@@ -2,6 +2,23 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [Unreleased]
+
+### Fixed
+- **You could scroll the whole app off the screen into blank space.** Every page with a switch on it
+  — Settings worst of all, but also Console, Mods, Logs and the dashboard — could be scrolled past
+  the end of its content until the sidebar and everything else had gone and nothing was left. The
+  hidden checkbox inside each toggle is positioned off the visible track, but the label around it was
+  never marked as its positioning parent, so the browser measured it against the whole document
+  instead. A switch far down a long page therefore parked an invisible box at that depth in page
+  coordinates and stretched the document to reach it — on Settings, 1209px of nothing below the fold.
+  Present since the first public release
+- **The Spawn tab had a scrollbar inside a scrollbar.** The creature and gear grids capped themselves
+  at 58% of the window height and scrolled internally, so the wheel moved the grid until it bottomed
+  out and then jumped the page, and the box sat mostly below the fold — you scrolled the page to
+  reach a list you then had to scroll again. They now flow with the page and it scrolls once, the way
+  the ninety game settings and the setup guide already did
+
 ## [0.3.0] — 2026-09-02
 
 A creative server run for a child should not require anybody to memorise

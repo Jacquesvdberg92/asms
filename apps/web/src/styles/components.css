@@ -411,11 +411,17 @@ a:hover > svg { opacity: 1; }
  * The creature and gear pickers. Dense enough that a few hundred entries stay
  * scannable, and tall enough that the class name underneath each name is
  * readable - which is the whole point of the list: it is what you paste.
+ *
+ * No max-height and no overflow of its own. It had both, which put a second
+ * scrollbar inside the page's one: the wheel moved the grid until it bottomed
+ * out and then jumped the page, and the box itself sat mostly below the fold
+ * so you scrolled the page to reach a thing you then had to scroll again.
+ * Every other long list here - ninety game settings, the whole setup guide -
+ * just flows and lets .content scroll once. So does this.
  */
 .spawn-grid {
   display: grid; gap: 8px;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  max-height: 58vh; overflow-y: auto;
   padding: 2px;
 }
 .spawn-tile {

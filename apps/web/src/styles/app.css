@@ -248,7 +248,15 @@ p { margin: 0; }
 .input-group { display: flex; gap: 8px; }
 .input-group .input { flex: 1; }
 
-.toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+/*
+ * position: relative is load-bearing. The real checkbox is positioned off the
+ * visible track, and without a positioned ancestor it resolves against the
+ * document instead of the label - so a toggle far down a scrolled page parked
+ * an invisible 13px box at that depth in *document* coordinates and stretched
+ * the whole page to reach it. You could then scroll the app off screen, sidebar
+ * and all, into blank space below.
+ */
+.toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; position: relative; }
 .toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .toggle-track {
   width: 38px; height: 22px; border-radius: 99px; background: rgba(255, 255, 255, 0.12);
