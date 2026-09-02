@@ -144,8 +144,33 @@ async function doInstall(onLine?: (line: string) => void): Promise<string> {
 
   const target = path.join(STEAMCMD_DIR, process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh');
   if (!fs.existsSync(target)) throw new Error('SteamCMD unpacked but the executable is missing');
+  await bootstrap(onLine);
   onLine?.('SteamCMD installed.');
   return target;
+}
+
+/**
+ * Run SteamCMD once with nothing riding on it, so it can finish installing itself.
+ *
+ * What Valve's zip holds is a 2013-era updater, not the client. Its first run
+ * downloads the real client, unpacks it, restarts into it and carries on with
+ * whatever commands it was handed - but the client it has just unpacked has no
+ * app configuration yet, so an `app_update` in that same first run dies with
+ * `Failed to install app '2430930' (Missing configuration)`.
+ *
+ * Every brand-new ASMS therefore failed on the first server it was asked to
+ * download, and worked the moment you pressed the button again - which is not
+ * something anybody should have to discover for themselves. Getting the
+ * bootstrap over with here makes the download that follows the second run.
+ */
+async function bootstrap(onLine?: (line: string) => void): Promise<void> {
+  onLine?.('Letting SteamCMD finish installing itself before the first download...');
+  try {
+    await runSteamCmd(['+login', 'anonymous', '+quit'], (line) => onLine?.(line));
+  } catch (err) {
+    // Never fatal: the run that matters comes next, and it reports its own failure.
+    log.warn('SteamCMD warm-up run failed', err);
+  }
 }
 
 export interface SteamRun {
@@ -207,6 +232,21 @@ export interface UpdateOptions {
   onChild?: (kill: () => void) => void;
 }
 
+/** SteamCMD saying it has not finished setting itself up, rather than that anything is wrong. */
+const NOT_READY = /\(Missing configuration\)/i;
+
+function reportedSuccess(output: string): boolean {
+  return new RegExp(`Success! App '${ASA_APP_ID}'`, 'i').test(output);
+}
+
+/**
+ * Was this run lost to SteamCMD still unpacking itself, rather than to anything
+ * about the app it was asked for? Only that is worth going round again.
+ */
+export function worthAnotherRun(output: string): boolean {
+  return !reportedSuccess(output) && NOT_READY.test(output);
+}
+
 /** Install or update the ASA dedicated server into installPath. */
 export async function installOrUpdate(opts: UpdateOptions): Promise<void> {
   await ensureSteamCmd(opts.onLine);
@@ -222,9 +262,21 @@ export async function installOrUpdate(opts: UpdateOptions): Promise<void> {
     '+quit',
   ];
   opts.onLine(`> steamcmd ${args.join(' ')}`);
-  const { code, output } = await runSteamCmd(args, opts.onLine, opts.onProgress, opts.onChild);
-  const ok = new RegExp(`Success! App '${ASA_APP_ID}'`, 'i').test(output);
-  if (!ok) {
+  let { code, output } = await runSteamCmd(args, opts.onLine, opts.onProgress, opts.onChild);
+
+  /**
+   * ensureSteamCmd warms up the copy it installs itself, but one that was
+   * already on disk - pointed at by hand under Settings, or left behind by an
+   * older ASMS that never warmed one up - has never had that done.
+   * "Missing configuration" is precisely that state, and it clears itself, so
+   * it is worth one more go rather than an error nobody can act on.
+   */
+  if (worthAnotherRun(output)) {
+    opts.onLine('SteamCMD had not finished setting itself up. Trying again...');
+    ({ code, output } = await runSteamCmd(args, opts.onLine, opts.onProgress, opts.onChild));
+  }
+
+  if (!reportedSuccess(output)) {
     const err = /Error!\s*(.+)/i.exec(output)?.[1]?.trim();
     throw new Error(err || `SteamCMD exited with code ${code} without reporting success`);
   }
