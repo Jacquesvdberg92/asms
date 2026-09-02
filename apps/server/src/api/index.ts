@@ -504,14 +504,18 @@ export function createApi(): Router {
   );
 
   /**
-   * ARK keeps two ids per player and only accepts one of them here: ListPlayers
-   * reports the platform id, while GiveItemToPlayer wants the internal UE4 id.
-   * Asking the server to translate is the only reliable way across - guessing
-   * gets you a command that reports success and delivers nothing.
+   * ARK keeps two ids per player and GiveItemToPlayer accepts only one: the
+   * numeric Player ID. ListPlayers reports the other, a thirty-two character
+   * EOS id, and Ascended has no RCON command that converts between them -
+   * GetPlayerIDForSteamID is an Evolved-era command expecting a Steam id, and
+   * asking it here got silence that read as a broken server.
+   *
+   * The server has been writing the pair down all along though, in every
+   * AdminCmd line it logs, so the answer is read out of its own log.
    */
   api.post(
     '/servers/:id/players/resolve',
-    wrap(async (req) => {
+    wrap((req) => {
       const platformId = String(req.body?.platformId ?? '').trim();
       // Hex, because Ascended lists players by a thirty-two character EOS id.
       // Digits only rejected every id the game actually reports, so picking a
@@ -519,14 +523,15 @@ export function createApi(): Router {
       if (!/^[0-9a-fA-F]{5,40}$/.test(platformId)) {
         throw badRequest(`"${platformId}" does not look like a player id - expected 5 to 40 letters and digits.`);
       }
-      const response = await servers.rconExec(req.params.id, `GetPlayerIDForSteamID ${platformId}`);
-      // The reply is prose around a number, and the wording has changed between
-      // builds - so take the longest digit run rather than a fixed position.
-      const found = [...response.matchAll(/\d{4,}/g)]
-        .map((m) => m[0])
-        .filter((n) => n !== platformId)
-        .sort((a, b) => b.length - a.length)[0];
-      return { ue4Id: found ?? null, response };
+      const known = servers.arkIdsFor(servers.need(req.params.id));
+      const hit = known[platformId.toLowerCase()];
+      return {
+        ue4Id: hit?.arkId ?? null,
+        name: hit?.name ?? null,
+        source: hit ? 'log' : null,
+        /** How many players ASMS could name, for a message worth reading. */
+        seen: Object.keys(known).length,
+      };
     }),
   );
 

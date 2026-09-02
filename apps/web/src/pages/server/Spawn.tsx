@@ -156,6 +156,7 @@ export default function Spawn({ server, runtime }: { server: ServerInstance; run
         <div className="card-body stack">
           <RouteNote ready={ready} rconEnabled={server.rconEnabled} />
           <TargetPicker
+            serverId={server.id}
 
             players={runtime?.playerList ?? []}
             target={target}
@@ -236,31 +237,50 @@ function RouteNote({ ready, rconEnabled }: { ready: boolean; rconEnabled: boolea
  * open, so it is asked for once rather than before every give.
  */
 function TargetPicker({
+  serverId,
   players,
   target,
   onChange,
   ready,
 }: {
+  serverId: string;
   players: PlayerEntry[];
   target: Target;
   onChange: (target: Target) => void;
   ready: boolean;
 }) {
   const { toast } = useStore();
+  const [, run] = useAction();
+  const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState('');
-  /** Player IDs supplied this session, keyed by the id ListPlayers gave. */
+  /** Player IDs already worked out this session, keyed by the id ListPlayers gave. */
   const [known, setKnown] = useState<Record<string, string>>({});
   const [asking, setAsking] = useState<PlayerEntry | null>(null);
 
-  const pick = (player: PlayerEntry) => {
+  const pick = async (player: PlayerEntry) => {
     const remembered = known[player.id];
     if (remembered) {
       setAsking(null);
       onChange({ player, ue4Id: remembered });
       return;
     }
-    // Nothing usable for them yet. Ask, rather than sending the EOS id and
-    // letting ARK answer with silence that reads as a broken server.
+    setBusy(true);
+    const res = await run(() =>
+      api.post<{ ue4Id: string | null; seen: number }>(`/servers/${serverId}/players/resolve`, {
+        platformId: player.id,
+      }),
+    );
+    setBusy(false);
+    if (!res) return;
+    if (res.ue4Id) {
+      setKnown((prev) => ({ ...prev, [player.id]: res.ue4Id! }));
+      setAsking(null);
+      onChange({ player, ue4Id: res.ue4Id });
+      return;
+    }
+    // The log has never seen them run an admin command, so it has never had
+    // both ids on one line to read. Ask, rather than sending the EOS id and
+    // letting ARK answer with a silence that reads as a broken server.
     onChange(null);
     setAsking(player);
     setManual('');
@@ -303,9 +323,10 @@ function TargetPicker({
             <Button
               key={player.id}
               size="sm"
+              busy={busy}
               disabled={!ready}
               variant={target?.player.id === player.id ? 'primary' : asking?.id === player.id ? 'ok' : 'default'}
-              onClick={() => (target?.player.id === player.id ? onChange(null) : pick(player))}
+              onClick={() => (target?.player.id === player.id ? onChange(null) : void pick(player))}
             >
               {player.name}
             </Button>
@@ -314,11 +335,18 @@ function TargetPicker({
       )}
 
       {asking ? (
-        <Callout tone="info" title={`${asking.name}'s Player ID, once`}>
-          In game, open the Admin Manager — <span className="mono">cheat showadminmanager</span> — click {asking.name},
-          and read the <b>Player ID</b> field. Nine or ten digits. Paste it below and ASMS remembers it while this tab
-          is open. The long id on the player list above is their EOS id, which{' '}
-          <span className="mono">GiveItemToPlayer</span> will not take.
+        <Callout tone="info" title={`ASMS has not seen ${asking.name}'s Player ID yet`}>
+          <p>
+            It reads the number out of the server's own log, which records both of a player's ids together — but only
+            on a line written when somebody runs an admin command in game. {asking.name} has not done that on this
+            server yet, so there is nothing to read.
+          </p>
+          <p>
+            Have them run <span className="mono">cheat showadminmanager</span> in game once and ASMS will find it by
+            itself from then on. Or read the <b>Player ID</b> off that same Admin Manager — nine or ten digits — and
+            paste it below. The long id on the player list is their EOS id, which{' '}
+            <span className="mono">GiveItemToPlayer</span> will not take.
+          </p>
         </Callout>
       ) : null}
 

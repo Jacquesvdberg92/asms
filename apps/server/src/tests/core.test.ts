@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { parseIni, stringifyIni, getValue, getAll, setValue, setMulti, removeKey } from '../lib/ini.js';
 import { cronMatches, nextRun, validateCron } from '../core/scheduler.js';
-import { parsePlayers, RCON_SILENT } from '../core/servers.js';
+import { parsePlayers, parseArkIds, RCON_SILENT } from '../core/servers.js';
 import { RconClient } from '../lib/rcon.js';
 import { CREATURES, ITEMS, KITS, danglingSpawnRefs } from '../core/spawn.js';
 import { worthAnotherRun } from '../lib/steamcmd.js';
@@ -278,6 +278,37 @@ test('rcon: a real reply is not mistaken for silence', () => {
   assert.ok(!RCON_SILENT.test('No Players Connected'));
   assert.ok(!RCON_SILENT.test('0. Mark, 0002a1b3c4d5e6f7'));
   assert.ok(!RCON_SILENT.test('Server received, But no response!! and then some'));
+});
+
+// --------------------------------------------------------- player ids
+
+test('players: the numeric Player ID is read out of an AdminCmd log line', () => {
+  // Verbatim from a real ASA server log.
+  const line =
+    '[2026.09.02-10.29.11:686][822]2026.09.02_10.29.11: AdminCmd: showAdminManager (PlayerName: AFP_Smokey, ARKID: 827627995, PlatformID: 000283de23c04f9f81016833cce8691d)';
+  assert.deepEqual(parseArkIds(line), {
+    '000283de23c04f9f81016833cce8691d': { name: 'AFP_Smokey', arkId: '827627995' },
+  });
+});
+
+test('players: a command with quotes and spaces in it does not swallow the ids', () => {
+  const line =
+    'AdminCmd: GMSummon "Gigant_Character_BP_C" 300 (PlayerName: AFP_Smokey, ARKID: 827627995, PlatformID: 000283DE23C04F9F81016833CCE8691D)';
+  // Lower-cased, because ARK writes the same id in both cases across lines.
+  assert.equal(parseArkIds(line)['000283de23c04f9f81016833cce8691d'].arkId, '827627995');
+});
+
+test('players: a join line carries no Player ID, so it contributes nothing', () => {
+  const line = 'AFP_Smokey [UniqueNetId:000283de23c04f9f81016833cce8691d Platform:None] joined this ARK!';
+  assert.deepEqual(parseArkIds(line), {});
+});
+
+test('players: the newest line wins when an id has been recorded more than once', () => {
+  const text = [
+    'AdminCmd: a (PlayerName: Old, ARKID: 111111111, PlatformID: aabbcc)',
+    'AdminCmd: b (PlayerName: New, ARKID: 222222222, PlatformID: aabbcc)',
+  ].join('\n');
+  assert.deepEqual(parseArkIds(text).aabbcc, { name: 'New', arkId: '222222222' });
 });
 
 // -------------------------------------------------------------- SteamCMD

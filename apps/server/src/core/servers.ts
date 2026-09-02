@@ -1693,6 +1693,83 @@ export function parsePlayers(text: string): PlayerEntry[] {
   return out;
 }
 
+/**
+ * ARK writes both of a player's ids on one line whenever they run an admin
+ * command in game:
+ *
+ *   AdminCmd: showAdminManager (PlayerName: AFP_Smokey, ARKID: 827627995, PlatformID: 000283de...)
+ *
+ * ARKID is the numeric Player ID that GiveItemToPlayer takes; PlatformID is the
+ * thirty-two character EOS id ListPlayers reports and the give refuses. There
+ * is no RCON command in Ascended that converts one to the other, but the server
+ * has been writing the pair down all along - so ASMS reads it out of the log
+ * rather than asking somebody to go and look it up by hand.
+ *
+ * Only AdminCmd lines carry it. Joining writes the platform id alone, so a
+ * player who has never run an admin command is still unknown - and running
+ * `showadminmanager`, which is exactly what people are told to do to find the
+ * number, is itself enough to record it.
+ */
+const ARK_ID_LINE = /PlayerName:\s*(.+?),\s*ARKID:\s*(\d+),\s*PlatformID:\s*([0-9a-fA-F]+)/g;
+
+export interface ArkId {
+  name: string;
+  arkId: string;
+}
+
+/** Every platform id -> Player ID pairing in this text. Later lines win. */
+export function parseArkIds(text: string): Record<string, ArkId> {
+  const out: Record<string, ArkId> = {};
+  for (const m of text.matchAll(ARK_ID_LINE)) {
+    out[m[3].toLowerCase()] = { name: m[1].trim(), arkId: m[2] };
+  }
+  return out;
+}
+
+/** The same, read out of every log this server has written. Newest wins. */
+export function arkIdsFor(server: ServerInstance): Record<string, ArkId> {
+  const dir = ark.logDir(server.installPath);
+  if (!fs.existsSync(dir)) return {};
+  let files: string[];
+  try {
+    files = fs
+      .readdirSync(dir)
+      .filter((name) => /^ShooterGame.*\.log$/i.test(name))
+      .map((name) => path.join(dir, name))
+      .map((full) => ({ full, at: fs.statSync(full).mtimeMs }))
+      .sort((a, b) => a.at - b.at)
+      .map((f) => f.full);
+  } catch {
+    return {};
+  }
+  const found: Record<string, ArkId> = {};
+  for (const file of files) {
+    try {
+      // These stay small - ARK rotates them - but a runaway one is not worth
+      // reading into memory to find a line that is near the end anyway.
+      const { size } = fs.statSync(file);
+      const cap = 8 * 1024 * 1024;
+      let text: string;
+      if (size <= cap) {
+        text = fs.readFileSync(file, 'utf8');
+      } else {
+        const fd = fs.openSync(file, 'r');
+        try {
+          const buf = Buffer.alloc(cap);
+          fs.readSync(fd, buf, 0, cap, size - cap);
+          text = buf.toString('utf8');
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+      Object.assign(found, parseArkIds(text));
+    } catch {
+      /* an unreadable log is not worth failing a give over */
+    }
+  }
+  return found;
+}
+
 export async function refreshPlayers(id: string): Promise<PlayerEntry[]> {
   // Polled every few seconds by the runtime watcher, so it stays out of the console.
   const text = await rconExec(id, 'ListPlayers', { echo: false });

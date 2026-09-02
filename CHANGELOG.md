@@ -2,6 +2,27 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.5] — 2026-09-02
+
+0.3.4 asked you to go and look the Player ID up yourself. The server had been writing it down in
+its own log the whole time.
+
+### Added
+- **ASMS finds the numeric Player ID on its own, out of the server's log.** ARK records both of a
+  player's ids on one line every time somebody runs an admin command in game — `AdminCmd:
+  showAdminManager (PlayerName: AFP_Smokey, ARKID: 827627995, PlatformID: 000283de…691d)`. ARKID is
+  the number `GiveItemToPlayer` wants; PlatformID is the EOS id `ListPlayers` reports. Picking a name
+  now reads the pairing straight out of `ShooterGame.log` and its backups, so a give just works —
+  no Admin Manager, no copying digits by hand
+- Where the log has never seen that player run an admin command there is nothing to read, so ASMS
+  says exactly that and offers the two ways forward: have them run `cheat showadminmanager` once,
+  after which ASMS finds it by itself, or paste the number in as before
+
+### Fixed
+- **`GetPlayerIDForSteamID` is gone from the resolve path.** It is an Evolved-era command expecting a
+  Steam id, so on Ascended it answered nothing at all — and that silence was what the Spawn tab had
+  been building on
+
 ## [0.3.4] — 2026-09-02
 
 0.3.3 stopped ASMS from corrupting the player id. This one stops it sending the wrong id
