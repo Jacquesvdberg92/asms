@@ -2,6 +2,51 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.2] — 2026-09-02
+
+The first server anybody added failed to download. Every time, on every fresh install. SteamCMD
+needs one run to finish installing itself, and ASMS was asking it for a 12 GB game on that run.
+
+### Fixed
+- **Adding a server no longer fails the first time you do it.** The `steamcmd.exe` inside Valve's zip
+  is a 2013-era updater, not the client: its first run downloads the real client, unpacks it, restarts
+  into it and carries on with whatever it was handed — but the client it has only just unpacked has no
+  app configuration yet, so the `app_update` in that same run died with `Failed to install app
+  '2430930' (Missing configuration)`. So every brand-new ASMS met **SteamCMD failed** on the first
+  server it was asked for, and worked the moment you pressed the button again, which is not something
+  anybody should have to discover for themselves. ASMS now runs SteamCMD once with nothing riding on
+  it, right after unpacking it, so the download that follows is the second run
+- A SteamCMD that was already on disk — pointed at by hand under **Settings → Folders**, or left by an
+  older ASMS that never warmed one up — gets one automatic retry when it reports that same
+  "Missing configuration", instead of an error nobody can act on. Every other failure is reported the
+  first time, exactly as before
+
+- **RCON commands and their replies are written to the Console tab.** Pressing Give, Send or a kit
+  button left no trace anywhere — not in the console, not in the log — so a command that silently did
+  nothing looked exactly like one that was never sent, and there was nothing to go back and read
+  afterwards. Every command a person sets off is now echoed with its reply. ASMS's own polling
+  (`ListPlayers` every few seconds, the readiness knock while a server boots) stays out of it
+- **`Server received, But no response!!` is explained instead of just printed.** That is ARK saying it
+  ran the command and printed nothing — its normal answer to most admin commands, and equally what
+  comes back when the command could not do anything at all. The Spawn tab now says so where the reply
+  is shown, rather than leaving a sentence that reads like a fault
+- **The Spawn tab stops leading with a button that cannot work.** `GMSummon` places the creature at
+  whoever ran the command, and an RCON session is not standing anywhere on the map — so **Copy for the
+  in-game console** is now the primary action on a creature, the RCON attempt is a quiet secondary, and
+  the reason is spelled out in the dialog instead of hidden in a tooltip. The dialog also covers handing
+  a spawned creature to somebody else with `cheat GiveToMe`
+- **A player whose id will not translate is no longer told they picked wrong.** `GetPlayerIDForSteamID`
+  is an Evolved-era command that expects a Steam id, and Ascended lists players by their EOS id, so it
+  cannot convert one. ASMS now says where the UE4 Player ID actually comes from — the in-game pause
+  menu, or `cheat showadminmanager` — rather than reporting that the name could not be resolved
+
+### Added
+- **Tagging a version now publishes the release.** 0.3.0 and 0.3.1 were tagged and pushed, and neither
+  ever appeared on the Releases page — so anyone following the Quick start downloaded 0.2.1 while the
+  repository was two releases ahead of it. Pushing a `v*` tag now typechecks, tests and builds that
+  tag and then publishes a GitHub release, with that version's section of this changelog as the notes
+
+
 ## [0.3.1] — 2026-09-02
 
 Every page with a switch on it could be scrolled off the screen entirely, sidebar and all, into

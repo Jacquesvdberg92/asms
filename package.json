@@ -1,6 +1,6 @@
 {
   "name": "asms",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "ASMS - Ark Server Management Suite. A sleek, self-hosted manager for ARK: Survival Ascended dedicated servers.",
   "workspaces": [
