@@ -9,15 +9,16 @@ import { duration } from '../lib/format';
 import Overview from './server/Overview';
 import ConsolePanel from './server/Console';
 import Players from './server/Players';
+import Spawn from './server/Spawn';
 import SettingsPanel from './server/SettingsPanel';
 import Mods from './server/Mods';
 import Backups from './server/Backups';
 import Schedule from './server/Schedule';
 import Logs from './server/Logs';
 
-type TabId = 'overview' | 'console' | 'players' | 'settings' | 'mods' | 'backups' | 'schedule' | 'logs';
+type TabId = 'overview' | 'console' | 'players' | 'spawn' | 'settings' | 'mods' | 'backups' | 'schedule' | 'logs';
 
-const TAB_IDS: TabId[] = ['overview', 'console', 'players', 'settings', 'mods', 'backups', 'schedule', 'logs'];
+const TAB_IDS: TabId[] = ['overview', 'console', 'players', 'spawn', 'settings', 'mods', 'backups', 'schedule', 'logs'];
 
 export default function ServerDetail() {
   const { id = '', tab } = useParams();
@@ -115,6 +116,7 @@ export default function ServerDetail() {
             { id: 'overview', label: 'Overview' },
             { id: 'console', label: 'Console' },
             { id: 'players', label: 'Players', count: runtime?.players ?? 0 },
+            { id: 'spawn', label: 'Spawn' },
             { id: 'settings', label: 'Settings' },
             { id: 'mods', label: 'Mods', count: server.mods.filter((m) => m.enabled).length },
             { id: 'backups', label: 'Backups', count: backups.filter((b) => b.serverId === id).length },
@@ -126,6 +128,7 @@ export default function ServerDetail() {
         {active === 'overview' ? <Overview server={server} runtime={runtime} /> : null}
         {active === 'console' ? <ConsolePanel server={server} runtime={runtime} /> : null}
         {active === 'players' ? <Players server={server} runtime={runtime} /> : null}
+        {active === 'spawn' ? <Spawn server={server} runtime={runtime} /> : null}
         {active === 'settings' ? <SettingsPanel server={server} runtime={runtime} /> : null}
         {active === 'mods' ? <Mods server={server} runtime={runtime} /> : null}
         {active === 'backups' ? <Backups server={server} runtime={runtime} /> : null}

@@ -247,4 +247,22 @@ export const Icon = {
       <path d="M15.5 8.5l-2 5-5 2 2-5z" />
     </svg>
   ),
+  Paw: ({ size = 17, className }: IconProps) => (
+    <svg {...base(size)} className={className}>
+      <ellipse cx="6" cy="10" rx="2.1" ry="2.6" />
+      <ellipse cx="10.4" cy="6.4" rx="2.1" ry="2.7" />
+      <ellipse cx="15.6" cy="6.4" rx="2.1" ry="2.7" />
+      <ellipse cx="19" cy="10.6" rx="2.1" ry="2.6" />
+      <path d="M12.5 12.4c2.6 0 4.6 2 5.2 4.2.5 2-.9 3.6-2.9 3.4-1-.1-1.7-.5-2.3-.5s-1.3.4-2.3.5c-2 .2-3.4-1.4-2.9-3.4.6-2.2 2.6-4.2 5.2-4.2z" />
+    </svg>
+  ),
+  Gift: ({ size = 15, className }: IconProps) => (
+    <svg {...base(size)} className={className}>
+      <rect x="3" y="10" width="18" height="10" rx="1.5" />
+      <path d="M2.5 7h19v3h-19z" />
+      <path d="M12 7v13" />
+      <path d="M12 7S10.5 3 8.5 3a2 2 0 0 0 0 4z" />
+      <path d="M12 7s1.5-4 3.5-4a2 2 0 0 1 0 4z" />
+    </svg>
+  ),
 };

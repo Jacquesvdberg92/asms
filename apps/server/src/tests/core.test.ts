@@ -5,6 +5,7 @@ import { parseIni, stringifyIni, getValue, getAll, setValue, setMulti, removeKey
 import { cronMatches, nextRun, validateCron } from '../core/scheduler.js';
 import { parsePlayers } from '../core/servers.js';
 import { RconClient } from '../lib/rcon.js';
+import { CREATURES, ITEMS, KITS, danglingSpawnRefs } from '../core/spawn.js';
 
 // ------------------------------------------------------------------- INI
 
@@ -226,6 +227,42 @@ test('rcon: concurrent callers share one connection attempt', async () => {
   assert.ok(results.every((r) => r.status === 'rejected'));
   assert.equal(client.listenerCount('auth'), 0);
   client.close();
+});
+
+// ------------------------------------------------------------------ spawn
+
+test('spawn: every kit item and creature saddle resolves to a real item', () => {
+  assert.deepEqual(danglingSpawnRefs(), []);
+});
+
+test('spawn: entity ids and gfi codes are unique and shaped like ARK class names', () => {
+  const seen = new Set<string>();
+  for (const creature of CREATURES) {
+    assert.match(creature.cls, /^[A-Za-z0-9_]+$/, `${creature.name} has a suspicious entity id`);
+    assert.ok(!seen.has(creature.name), `duplicate creature name: ${creature.name}`);
+    seen.add(creature.name);
+  }
+  const codes = new Set<string>();
+  for (const entry of ITEMS) {
+    assert.match(entry.gfi, /^[A-Za-z0-9_]+$/, `${entry.name} has a suspicious gfi code`);
+    assert.ok(!codes.has(entry.gfi), `duplicate gfi code: ${entry.gfi}`);
+    codes.add(entry.gfi);
+  }
+});
+
+test('spawn: blueprint paths are rooted and repeat the class name, as ARK expects', () => {
+  for (const entry of ITEMS) {
+    if (!entry.path) continue;
+    assert.ok(entry.path.startsWith('/Game/'), `${entry.name} path is not rooted at /Game/`);
+    assert.ok(!entry.path.includes('..'), `${entry.name} path is not resolved`);
+    const tail = entry.path.slice(entry.path.lastIndexOf('/') + 1);
+    const [asset, cls] = tail.split('.');
+    assert.equal(cls, asset, `${entry.name} path does not repeat its class name`);
+  }
+});
+
+test('spawn: no kit is empty', () => {
+  for (const kit of KITS) assert.ok(kit.items.length > 0, `${kit.id} is empty`);
 });
 
 /** A port with nothing on it, so a connection is refused rather than hanging. */

@@ -143,6 +143,7 @@ export function CommandPalette() {
       ['', 'Overview', 'status launch command ports firewall install update disk'],
       ['console', 'Console', 'rcon command broadcast saveworld chat output log live'],
       ['players', 'Players', 'online kick ban whitelist steam id who'],
+      ['spawn', 'Spawn', 'dino creature gear item give gmsummon gfi tamed level kit armour saddle creative dododex'],
       ['settings', 'Settings', 'ini rates rules launch flags passwords ports map name'],
       ['mods', 'Mods', 'curseforge project id load order automanagedmods'],
       ['backups', 'Backups', 'save world zip restore snapshot rollback'],

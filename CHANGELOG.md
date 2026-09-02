@@ -2,6 +2,35 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [Unreleased]
+
+### Added
+- **A Spawn tab on every server**, for the creative servers people run for their kids: 237 creatures
+  and 325 pieces of gear, picked from a searchable, grouped list rather than typed from memory.
+  Choose Rex, set the level, and ASMS writes `cheat GMSummon "Rex_Character_BP_C" 150` — no
+  hunting for a class name, no typo that spawns nothing and says nothing
+- **Gear is handed over, not dictated.** Pick a connected player and press Give: ASMS asks the
+  server to translate their platform id into the internal UE4 id ARK actually wants, then runs
+  `GiveItemToPlayer`. The item lands in their inventory and nobody has typed anything. A box for
+  pasting an id covers someone who is offline or will not resolve
+- **Creatures are honest about the limit ARK imposes.** `GMSummon` spawns at whoever ran it, and
+  an RCON session is nobody standing anywhere, so the tab writes the line out to paste into the
+  in-game console instead of pretending. Send is still offered, and the server's reply is always
+  shown verbatim — ARK answers most admin commands with silence, which reads as failure otherwise
+- **Kits** — starter, taming, builder, flak, full Tek, explorer — send a dozen gives in one press.
+  New `POST /servers/:id/rcon/batch` runs them in order down the one RCON socket and reports which
+  landed, rather than stopping at the first refusal
+- Level presets at 5 / 30 / 75 / 150 / 224 / 300, a tamed-or-wild switch, quality and blueprint
+  options on every give, and a Dododex link on every creature
+- The Spawn tab is on Ctrl-K like every other tab, and reachable at `/servers/:id/spawn`
+- Items whose blueprint path could not be confirmed are marked *console only*: a wrong path makes
+  `GiveItemToPlayer` report success and deliver nothing, so ASMS offers the reliable `GFI` line
+  for those instead of a give that quietly fails
+- Credit where it is due: the Spawn tab and the README both name their sources. The ids are ARK's
+  own, checked against the ARK Official Community Wiki; [Dododex](https://www.dododex.com/) is
+  linked from every creature rather than copied, since taming times and stats are theirs
+
+
 ## [0.2.1] — 2026-09-01
 
 Two ways a brand-new install could stop before it started: a first run that asked for a

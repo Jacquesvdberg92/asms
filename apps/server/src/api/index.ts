@@ -18,6 +18,7 @@ import * as archive from '../core/archive.js';
 import * as library from '../core/library.js';
 import * as presets from '../core/presets.js';
 import * as updates from '../core/updates.js';
+import * as spawn from '../core/spawn.js';
 import { MAPS, SETTINGS, SETTING_GROUPS, RCON_COMMANDS, LAUNCH_FLAGS, LAUNCH_FLAG_GROUPS, ACTIVE_EVENTS } from '../core/catalog.js';
 import {
   authRequired,
@@ -166,6 +167,22 @@ export function createApi(): Router {
       activeEvents: ACTIVE_EVENTS,
       presets: presets.PRESETS,
       appId: ASA_APP_ID,
+    });
+  });
+
+  /**
+   * The spawn catalogue is an order of magnitude bigger than the rest of the
+   * catalogue and only the Spawn tab wants it, so it is fetched on demand
+   * rather than loaded into every session at sign-in.
+   */
+  api.get('/spawn/catalog', (_req, res) => {
+    res.json({
+      creatures: spawn.CREATURES,
+      creatureGroups: spawn.CREATURE_GROUPS,
+      items: spawn.ITEMS,
+      itemGroups: spawn.ITEM_GROUPS,
+      kits: spawn.KITS,
+      sources: spawn.SPAWN_SOURCES,
     });
   });
 
@@ -453,6 +470,58 @@ export function createApi(): Router {
       if (!command) throw new Error('No command given');
       const response = await servers.rconExec(req.params.id, command);
       return { response };
+    }),
+  );
+
+  /**
+   * A kit is a dozen separate gives, and ARK will not take them as one string.
+   * Running them from the browser would mean a dozen round trips over a socket
+   * that only answers one command at a time, so the sequencing happens here.
+   *
+   * Failures do not abort the rest: handing over nine of twelve items and
+   * saying which three missed is more useful than stopping halfway with no
+   * record of where.
+   */
+  api.post(
+    '/servers/:id/rcon/batch',
+    wrap(async (req) => {
+      const raw: unknown = req.body?.commands;
+      if (!Array.isArray(raw)) throw badRequest('Expected a list of commands');
+      const commands = raw.map((c) => String(c ?? '').trim()).filter(Boolean);
+      if (!commands.length) throw badRequest('No commands given');
+      if (commands.length > 60) throw badRequest('Too many commands in one batch (60 max)');
+
+      const results: Array<{ command: string; response: string; error?: string }> = [];
+      for (const command of commands) {
+        try {
+          results.push({ command, response: await servers.rconExec(req.params.id, command) });
+        } catch (err) {
+          results.push({ command, response: '', error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return { results };
+    }),
+  );
+
+  /**
+   * ARK keeps two ids per player and only accepts one of them here: ListPlayers
+   * reports the platform id, while GiveItemToPlayer wants the internal UE4 id.
+   * Asking the server to translate is the only reliable way across - guessing
+   * gets you a command that reports success and delivers nothing.
+   */
+  api.post(
+    '/servers/:id/players/resolve',
+    wrap(async (req) => {
+      const platformId = String(req.body?.platformId ?? '').trim();
+      if (!/^\d{5,25}$/.test(platformId)) throw badRequest('That does not look like a platform id');
+      const response = await servers.rconExec(req.params.id, `GetPlayerIDForSteamID ${platformId}`);
+      // The reply is prose around a number, and the wording has changed between
+      // builds - so take the longest digit run rather than a fixed position.
+      const found = [...response.matchAll(/\d{4,}/g)]
+        .map((m) => m[0])
+        .filter((n) => n !== platformId)
+        .sort((a, b) => b.length - a.length)[0];
+      return { ue4Id: found ?? null, response };
     }),
   );
 

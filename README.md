@@ -159,6 +159,21 @@ to them the next time it starts.
 - Live charts of players over time, per-server sparklines, CPU and memory
 - Command palette on Ctrl/Cmd-K to jump to any server, tab or action
 
+**Spawning, for creative servers**
+- A **Spawn** tab on every server: 237 creatures and 325 pieces of gear, click to pick rather than
+  typed from memory. Choose a creature, set the level, and ASMS writes
+  `cheat GMSummon "Rex_Character_BP_C" 150` for you — no hunting for the class name, no typos
+- **Gear is delivered, not dictated.** Pick a connected player and press Give: ASMS translates their
+  platform ID into the internal one ARK wants and hands the item straight over. Nobody types anything
+- Creatures cannot work that way and ASMS says so rather than pretending. `GMSummon` spawns at
+  whoever runs it, and an RCON session is not standing anywhere on the map — so the tab writes the
+  line out to paste into the in-game console instead
+- **Kits** — starter, taming, builder, flak, full Tek, explorer — send a dozen gives in one press,
+  and report which ones landed
+- Every creature links to its **[Dododex](https://www.dododex.com/)** page. ASMS carries ARK's own
+  identifiers and nothing more; taming times, food counts and stats stay where they were written.
+  See [Where the spawn codes come from](#where-the-spawn-codes-come-from)
+
 **Keeping it alive**
 - Scheduled restarts, backups, updates and RCON commands on a cron expression
 - Countdowns that broadcast in game and land the restart *exactly* on the scheduled time — and can
@@ -585,6 +600,28 @@ unpacks a CurseForge mod about 164 characters below it, and Windows refuses to c
 past 247 characters, so the server installs, boots and runs perfectly while every mod download dies
 part-way. Move the server to a shorter folder — `C:\ASA\servers\<name>` is ideal. ASMS now checks
 this when you choose the folder and refuses paths that cannot work.
+
+---
+
+## Where the spawn codes come from
+
+The Spawn tab needs two kinds of string: the entity id that names a creature to `GMSummon`
+(`Rex_Character_BP_C`), and the blueprint path that names an item to `GiveItemToPlayer`. Both are
+ARK's own — they are the class names Wildcard ships inside the game's asset files, which is why
+every admin tool, wiki and community site quotes exactly the same strings. There is only one correct
+spelling of each.
+
+ASMS' list was assembled and checked against the
+[ARK Official Community Wiki](https://ark.wiki.gg/wiki/Creature_IDs), then trimmed to what people
+actually ask for on a family server. Where a blueprint path could not be confirmed, the item is
+marked *console only* and ASMS offers the `GFI` line instead of a `GiveItemToPlayer` that would
+report success and deliver nothing.
+
+**[Dododex](https://www.dododex.com/) is linked, not copied.** Every creature in the tab has a link
+straight to its Dododex page, because that is where the part worth having lives — taming times, food
+counts, torpor, stat calculators and strategy, all of it written by them. None of that data is
+reproduced in ASMS, and nothing is scraped from their site or API. ASMS carries the identifiers;
+Dododex carries the knowledge built on top of them.
 
 ---
 

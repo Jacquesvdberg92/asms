@@ -20,6 +20,8 @@ import { checkWebhook } from '../lib/notify.js';
 import { writeZip, extractZip, walkFolder } from '../lib/zip.js';
 import { assertSafeToDelete } from '../core/servers.js';
 import { identify, sameProcess, shutdownProcTools } from '../lib/proc.js';
+import { guard } from '../api/auth.js';
+import { settings, setSettings } from '../lib/store.js';
 import type { AppSettings } from '../types.js';
 
 const baseSettings = (): AppSettings => ({
@@ -182,6 +184,81 @@ test('setup: clearing the hash by hand is the way back in after a forgotten pass
   // What the sign-in screen tells people to do: empty the field, restart.
   const cleared = await migrateSettings({ ...withPassword, passwordHash: '' }, baseSettings());
   assert.equal(cleared.signInDisabled, false, 'ASMS offers to set a new one instead of opening up');
+});
+
+// ------------------------------------------------------------ the perimeter
+
+/**
+ * A request and response thin enough to hand straight to the guard, so the
+ * middleware itself is tested rather than a paraphrase of it.
+ */
+function probe(path: string, headers: Record<string, string> = {}): { status: number; passed: boolean } {
+  let status = 0;
+  let passed = false;
+  const res = {
+    status(code: number) {
+      status = code;
+      return this;
+    },
+    json() {
+      return this;
+    },
+  };
+  guard({ path, method: 'GET', query: {}, headers } as never, res as never, () => {
+    passed = true;
+  });
+  return { status, passed };
+}
+
+/** Swap the in-memory settings for one check, then put them back. */
+function withSettings(patch: Partial<AppSettings>, run: () => void): void {
+  const before = settings();
+  setSettings({ ...baseSettings(), ...patch });
+  try {
+    run();
+  } finally {
+    setSettings(before);
+  }
+}
+
+/**
+ * The routes added for the Spawn tab go on the same router, behind the same
+ * guard, as everything else - but that is a property of one `api.use(guard)`
+ * line sitting above them, which a future edit could quietly move. A new
+ * install left open because a route was added in the wrong place is the exact
+ * failure 0.2.1 was released to fix.
+ */
+const ADDED_ROUTES = ['/spawn/catalog', '/servers/abc/rcon/batch', '/servers/abc/players/resolve'];
+
+test('perimeter: a fresh install answers 401 everywhere except the first-run question', () => {
+  withSettings({ passwordHash: '', signInDisabled: false }, () => {
+    assert.equal(probe('/auth/status').passed, true, 'the setup screen has to be able to ask');
+    assert.equal(probe('/auth/setup').passed, true, 'and to answer');
+
+    for (const route of [...ADDED_ROUTES, '/catalog', '/state', '/servers']) {
+      const res = probe(route);
+      assert.equal(res.passed, false, `${route} must not be reachable before setup`);
+      assert.equal(res.status, 401, `${route} should answer 401, not ${res.status}`);
+    }
+  });
+});
+
+test('perimeter: with a password set, the spawn routes need a token like everything else', () => {
+  withSettings({ passwordHash: 'scrypt$fake$hash', signInDisabled: false }, () => {
+    for (const route of ADDED_ROUTES) {
+      const res = probe(route);
+      assert.equal(res.passed, false, `${route} must not be reachable unsigned-in`);
+      assert.equal(res.status, 401);
+    }
+  });
+});
+
+test('perimeter: someone who chose to run without a password still reaches the spawn routes', () => {
+  withSettings({ passwordHash: '', signInDisabled: true }, () => {
+    for (const route of ADDED_ROUTES) {
+      assert.equal(probe(route).passed, true, `${route} should be open on a no-password install`);
+    }
+  });
 });
 
 // ----------------------------------------------------------------- scheduler
