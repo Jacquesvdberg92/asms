@@ -2,7 +2,11 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
-## [Unreleased]
+## [0.3.0] — 2026-09-02
+
+A creative server run for a child should not require anybody to memorise
+`Rex_Character_BP_C`. This release adds a Spawn tab that turns the two admin commands nobody
+enjoys typing — `GMSummon` and the give family — into a searchable list you click.
 
 ### Added
 - **A Spawn tab on every server**, for the creative servers people run for their kids: 237 creatures
