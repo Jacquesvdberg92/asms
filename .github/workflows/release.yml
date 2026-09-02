@@ -1,0 +1,70 @@
+# Publishing the GitHub release for a version.
+#
+# 0.3.0 and 0.3.1 were both tagged and pushed, and neither ever appeared on the
+# Releases page - so anybody following the Quick start downloaded 0.2.1 while
+# the repository was two releases ahead. Tagging is now the whole of shipping.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # For a tag that was pushed before this workflow existed, or one whose run
+  # needs doing again.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, e.g. v0.3.1'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      # A tag that does not build is not a release. This is the same work CI
+      # does on main, run against the tag itself so nothing can slip between.
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+
+      - name: Read the version out of the tag
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # The notes are this version's section of CHANGELOG.md, so the Releases
+      # page and the repository cannot say two different things.
+      - name: Release notes
+        run: node scripts/changelog-section.mjs "${{ steps.version.outputs.number }}" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ASMS ${{ steps.version.outputs.number }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
