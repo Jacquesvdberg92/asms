@@ -155,7 +155,7 @@ export default function Spawn({ server, runtime }: { server: ServerInstance; run
         <div className="card-body stack">
           <RouteNote ready={ready} rconEnabled={server.rconEnabled} />
           <TargetPicker
-            serverId={server.id}
+
             players={runtime?.playerList ?? []}
             target={target}
             onChange={setTarget}
@@ -226,49 +226,36 @@ function RouteNote({ ready, rconEnabled }: { ready: boolean; rconEnabled: boolea
  * and remembered, rather than on every give.
  */
 function TargetPicker({
-  serverId,
+
   players,
   target,
   onChange,
   ready,
 }: {
-  serverId: string;
+
   players: PlayerEntry[];
   target: Target;
   onChange: (target: Target) => void;
   ready: boolean;
 }) {
-  const { toast } = useStore();
-  const [, run] = useAction();
-  const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState('');
 
-  const pick = async (player: PlayerEntry) => {
-    setBusy(true);
-    const res = await run(() =>
-      api.post<{ ue4Id: string | null; response: string }>(`/servers/${serverId}/players/resolve`, {
-        platformId: player.id,
-      }),
-    );
-    setBusy(false);
-    if (!res) return;
-    if (!res.ue4Id) {
-      // The command answered, but with nothing that looks like an id - some
-      // builds word this differently. Saying so beats a button that shrugs.
-      // Not the player's fault and not a bug to chase: GetPlayerIDForSteamID
-      // is an Evolved-era command that expects a Steam id, and Ascended lists
-      // players by their EOS id instead. So say where the number really comes
-      // from rather than implying the pick was wrong.
-      toast(
-        'warn',
-        `ARK would not translate ${player.name}'s id`,
-        `It replied "${res.response.trim() || 'nothing at all'}". Ascended lists players by EOS id, which GetPlayerIDForSteamID cannot convert. Have them open the pause menu — or run "cheat showadminmanager" in game — read the Player ID off it, and paste it below.`,
-      );
-      onChange(null);
-      return;
-    }
-    onChange({ player, ue4Id: res.ue4Id });
-  };
+  /**
+   * Picking a name used to ask the server to translate the id first, through
+   * GetPlayerIDForSteamID. Two things were wrong with that.
+   *
+   * It is an Evolved-era command that expects a Steam id, and Ascended lists
+   * players by their EOS id, so there was nothing for it to translate. And the
+   * id ASMS handed it failed ASMS's own check on the way out - that check only
+   * accepted digits, while an EOS id is thirty-two hex characters - so picking
+   * a name off the list answered "That does not look like a platform id" and
+   * blamed the pick.
+   *
+   * So nothing is translated now: the id ListPlayers reported is used as it
+   * stands, and the box below takes the Player ID off the in-game pause menu
+   * for when ARK wants that one instead.
+   */
+  const pick = (player: PlayerEntry) => onChange({ player, ue4Id: player.id });
 
   return (
     <div className="stack" style={{ gap: 8 }}>
@@ -290,10 +277,9 @@ function TargetPicker({
             <Button
               key={player.id}
               size="sm"
-              busy={busy}
               disabled={!ready}
               variant={target?.player.id === player.id ? 'primary' : 'default'}
-              onClick={() => (target?.player.id === player.id ? onChange(null) : void pick(player))}
+              onClick={() => (target?.player.id === player.id ? onChange(null) : pick(player))}
             >
               {player.name}
             </Button>
@@ -306,9 +292,16 @@ function TargetPicker({
           <input
             className="input input-mono"
             value={manual}
-            placeholder="…or paste a UE4 player id"
+            placeholder="…or paste a player id"
             aria-label="UE4 player id"
-            onChange={(e) => setManual(e.target.value.replace(/\D/g, ''))}
+            /**
+             * Letters are kept. This used to strip everything but digits, so a
+             * thirty-two character EOS id pasted straight off the player list
+             * lost its nine letters in silence and became a twenty-three digit
+             * number that was not anybody's id - and the give that followed
+             * went out with it and delivered nothing.
+             */
+            onChange={(e) => setManual(e.target.value.replace(/[^0-9a-zA-Z]/g, ''))}
           />
           <Button
             size="sm"
@@ -319,8 +312,9 @@ function TargetPicker({
           </Button>
         </div>
         <span className="tiny faint">
-          Someone offline, or a name that will not resolve. <span className="mono">GetPlayerIDForSteamID</span> on the
-          Console tab returns it.
+          For somebody offline, or when a give does not arrive: have them open the pause menu in game — or run{' '}
+          <span className="mono">cheat showadminmanager</span> — and read the <b>Player ID</b> off it. Pasted exactly as
+          shown, letters and all.
         </span>
       </div>
 

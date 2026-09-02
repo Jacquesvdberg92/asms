@@ -2,6 +2,26 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.3] — 2026-09-02
+
+Gear could never have arrived. ASMS was deleting the letters out of the player id before it sent
+it, so every give went out addressed to a number that was nobody.
+
+### Fixed
+- **The box for pasting a player id was stripping every letter out of it.** Ascended identifies
+  players by a thirty-two character EOS id — hex, so roughly a third of it is letters — and the input
+  quietly dropped all of them as you pasted. What survived was a twenty-three digit number belonging
+  to no one, and `GiveItemToPlayer` was then sent that, answered `Server received, But no response!!`
+  and delivered nothing. It keeps what you paste now
+- **Picking a player off the live list said "That does not look like a platform id".** ASMS asked the
+  server to translate the id first, with `GetPlayerIDForSteamID` — an Evolved-era command that expects
+  a Steam id and has nothing to do with an EOS one. It never got that far: the id failed ASMS's own
+  check on the way out, which only accepted digits while the id it was checking was hex. So clicking a
+  name always failed, and blamed the name. Nothing is translated now — the id `ListPlayers` reported
+  is used exactly as it stands
+- The same digits-only rule is gone from the API, which now takes a player id of 5 to 40 hex
+  characters and quotes back what it rejected instead of a flat refusal
+
 ## [0.3.2] — 2026-09-02
 
 The first server anybody added failed to download. Every time, on every fresh install. SteamCMD

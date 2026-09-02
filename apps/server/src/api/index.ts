@@ -513,7 +513,12 @@ export function createApi(): Router {
     '/servers/:id/players/resolve',
     wrap(async (req) => {
       const platformId = String(req.body?.platformId ?? '').trim();
-      if (!/^\d{5,25}$/.test(platformId)) throw badRequest('That does not look like a platform id');
+      // Hex, because Ascended lists players by a thirty-two character EOS id.
+      // Digits only rejected every id the game actually reports, so picking a
+      // player off the live list always answered "not a platform id".
+      if (!/^[0-9a-fA-F]{5,40}$/.test(platformId)) {
+        throw badRequest(`"${platformId}" does not look like a player id - expected 5 to 40 letters and digits.`);
+      }
       const response = await servers.rconExec(req.params.id, `GetPlayerIDForSteamID ${platformId}`);
       // The reply is prose around a number, and the wording has changed between
       // builds - so take the longest digit run rather than a fixed position.
