@@ -84,8 +84,12 @@ export function giveSelfCommand(gfi: string, qty: number, quality: number, bluep
 
 /**
  * The only give that names its recipient, and the reason the Gear tab can work
- * without anyone typing in game. It wants the full blueprint path and the
- * player's internal UE4 id - not the platform id ListPlayers reports.
+ * without anyone typing in game.
+ *
+ * It wants the full blueprint path and the numeric Player ID - nine or ten
+ * digits, the one the in-game Admin Manager shows. Not the thirty-two
+ * character EOS id ListPlayers reports, which this command will not take and
+ * which there is no RCON way to convert.
  */
 export function givePlayerCommand(
   path: string,
@@ -95,6 +99,25 @@ export function givePlayerCommand(
   blueprint: boolean,
 ): string {
   return `GiveItemToPlayer ${ue4Id} "Blueprint'${path}'" ${Math.max(1, Math.round(qty))} ${clampQuality(quality)} ${blueprint ? 1 : 0}`;
+}
+
+/**
+ * The same give with the `Blueprint'...'` wrapper taken off.
+ *
+ * Some RCON stacks mangle the single quotes nested inside the double ones, and
+ * the command then fails with exactly the silence everything else here fails
+ * with. ARK takes the bare asset path too, so the second form is worth having
+ * to hand rather than leaving somebody with one string that will not work and
+ * no way to tell why.
+ */
+export function givePlayerCommandPlain(
+  path: string,
+  ue4Id: string,
+  qty: number,
+  quality: number,
+  blueprint: boolean,
+): string {
+  return `GiveItemToPlayer ${ue4Id} "${path}" ${Math.max(1, Math.round(qty))} ${clampQuality(quality)} ${blueprint ? 1 : 0}`;
 }
 
 export function clampLevel(level: number): number {

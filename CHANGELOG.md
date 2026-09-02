@@ -2,6 +2,26 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.4] — 2026-09-02
+
+0.3.3 stopped ASMS from corrupting the player id. This one stops it sending the wrong id
+altogether: `GiveItemToPlayer` takes the numeric Player ID, and nothing on the player list is it.
+
+### Fixed
+- **Gear is aimed with the numeric Player ID, which is the only id the command takes.** ARK keeps
+  two per player: the nine or ten digit Player ID the in-game Admin Manager shows, and the
+  thirty-two character EOS id `ListPlayers` reports. `GiveItemToPlayer` takes the first and refuses
+  the second, and Ascended has no RCON command that converts one into the other — 0.3.3 had ASMS
+  handing over the EOS id, which could never have worked. Picking a name now asks for their Player ID
+  once, says where to read it (`cheat showadminmanager` → click the player → **Player ID**), and
+  remembers it for as long as the tab is open
+- **An id that cannot work is refused with the reason, before the command goes out.** Paste a long
+  id full of letters and ASMS says that is the EOS one and this command will not take it, rather than
+  sending it and leaving you with `Server received, But no response!!` to interpret
+- **A second form of the give, for RCON stacks that mangle nested quotes.** Some choke on the single
+  quotes inside the double ones in `"Blueprint'…'"`, and ARK accepts the bare asset path too, so the
+  give dialog offers **Copy without the wrapper** alongside the normal one
+
 ## [0.3.3] — 2026-09-02
 
 Gear could never have arrived. ASMS was deleting the letters out of the player id before it sent

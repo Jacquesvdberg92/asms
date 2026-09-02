@@ -12,6 +12,7 @@ import {
   dododexUrl,
   giveSelfCommand,
   givePlayerCommand,
+  givePlayerCommandPlain,
   kitCommands,
   summonCommand,
   LEVEL_PRESETS,
@@ -221,49 +222,74 @@ function RouteNote({ ready, rconEnabled }: { ready: boolean; rconEnabled: boolea
 }
 
 /**
- * Who receives gear. ARK keeps two ids per player and only takes the internal
- * one here, so picking a name costs a round trip to translate it - done once
- * and remembered, rather than on every give.
+ * Who receives gear.
+ *
+ * ARK keeps two ids per player and GiveItemToPlayer takes only one of them:
+ * the numeric Player ID, nine or ten digits, the one the in-game Admin Manager
+ * shows. ListPlayers reports the other - a thirty-two character hex EOS id -
+ * and Ascended has no RCON command that turns one into the other. GMSummon's
+ * old partner GetPlayerIDForSteamID is an Evolved-era command expecting a
+ * Steam id, and answers nothing here.
+ *
+ * So a name off the live list says who, and their Player ID has to be read out
+ * of the game once and pasted. It is remembered per player while the tab is
+ * open, so it is asked for once rather than before every give.
  */
 function TargetPicker({
-
   players,
   target,
   onChange,
   ready,
 }: {
-
   players: PlayerEntry[];
   target: Target;
   onChange: (target: Target) => void;
   ready: boolean;
 }) {
+  const { toast } = useStore();
   const [manual, setManual] = useState('');
+  /** Player IDs supplied this session, keyed by the id ListPlayers gave. */
+  const [known, setKnown] = useState<Record<string, string>>({});
+  const [asking, setAsking] = useState<PlayerEntry | null>(null);
 
-  /**
-   * Picking a name used to ask the server to translate the id first, through
-   * GetPlayerIDForSteamID. Two things were wrong with that.
-   *
-   * It is an Evolved-era command that expects a Steam id, and Ascended lists
-   * players by their EOS id, so there was nothing for it to translate. And the
-   * id ASMS handed it failed ASMS's own check on the way out - that check only
-   * accepted digits, while an EOS id is thirty-two hex characters - so picking
-   * a name off the list answered "That does not look like a platform id" and
-   * blamed the pick.
-   *
-   * So nothing is translated now: the id ListPlayers reported is used as it
-   * stands, and the box below takes the Player ID off the in-game pause menu
-   * for when ARK wants that one instead.
-   */
-  const pick = (player: PlayerEntry) => onChange({ player, ue4Id: player.id });
+  const pick = (player: PlayerEntry) => {
+    const remembered = known[player.id];
+    if (remembered) {
+      setAsking(null);
+      onChange({ player, ue4Id: remembered });
+      return;
+    }
+    // Nothing usable for them yet. Ask, rather than sending the EOS id and
+    // letting ARK answer with silence that reads as a broken server.
+    onChange(null);
+    setAsking(player);
+    setManual('');
+  };
+
+  const use = () => {
+    const id = manual.trim();
+    if (!/^\d{6,12}$/.test(id)) {
+      toast(
+        'warn',
+        'That is not the id GiveItemToPlayer takes',
+        `ARK wants the numeric Player ID — nine or ten digits, like 194756294. "${id}" is not that. A long id with letters in it is the EOS one off the player list, and this command will not take it. Open the Admin Manager in game with "cheat showadminmanager", click the player, and read the Player ID field.`,
+      );
+      return;
+    }
+    const player = asking ?? { slot: 0, name: `id ${id}`, id };
+    if (asking) setKnown((prev) => ({ ...prev, [asking.id]: id }));
+    onChange({ player, ue4Id: id, typed: !asking });
+    setAsking(null);
+    setManual('');
+  };
 
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="row" style={{ gap: 6 }}>
         <span className="stat-label">Give gear to</span>
         <Help
-          title="Why picking a name takes a moment"
-          body="ListPlayers reports the platform id, but GiveItemToPlayer wants ARK's internal UE4 id. ASMS asks the server to translate the one into the other, then remembers it while they stay connected."
+          title="Why a name is not enough on its own"
+          body="GiveItemToPlayer takes the numeric Player ID the in-game Admin Manager shows — nine or ten digits. ListPlayers reports a thirty-two character EOS id instead, and Ascended has no RCON command that converts one to the other, so the number has to be read out of the game once. ASMS remembers it for as long as this tab is open."
         />
       </div>
       {players.length === 0 ? (
@@ -278,7 +304,7 @@ function TargetPicker({
               key={player.id}
               size="sm"
               disabled={!ready}
-              variant={target?.player.id === player.id ? 'primary' : 'default'}
+              variant={target?.player.id === player.id ? 'primary' : asking?.id === player.id ? 'ok' : 'default'}
               onClick={() => (target?.player.id === player.id ? onChange(null) : pick(player))}
             >
               {player.name}
@@ -287,34 +313,40 @@ function TargetPicker({
         </div>
       )}
 
+      {asking ? (
+        <Callout tone="info" title={`${asking.name}'s Player ID, once`}>
+          In game, open the Admin Manager — <span className="mono">cheat showadminmanager</span> — click {asking.name},
+          and read the <b>Player ID</b> field. Nine or ten digits. Paste it below and ASMS remembers it while this tab
+          is open. The long id on the player list above is their EOS id, which{' '}
+          <span className="mono">GiveItemToPlayer</span> will not take.
+        </Callout>
+      ) : null}
+
       <div className="row row-wrap" style={{ gap: 6 }}>
         <div className="input-group" style={{ maxWidth: 320 }}>
           <input
             className="input input-mono"
             value={manual}
-            placeholder="…or paste a player id"
-            aria-label="UE4 player id"
+            placeholder={asking ? `${asking.name}'s Player ID` : '…or paste a Player ID'}
+            aria-label="Player ID"
             /**
-             * Letters are kept. This used to strip everything but digits, so a
-             * thirty-two character EOS id pasted straight off the player list
-             * lost its nine letters in silence and became a twenty-three digit
-             * number that was not anybody's id - and the give that followed
-             * went out with it and delivered nothing.
+             * Letters are kept as typed. The old filter stripped every non-digit
+             * as you pasted, which turned a thirty-two character EOS id into a
+             * twenty-three digit number belonging to nobody, with nothing to
+             * show that it had happened. They are refused on Use instead, where
+             * there is room to say why.
              */
             onChange={(e) => setManual(e.target.value.replace(/[^0-9a-zA-Z]/g, ''))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && manual.length >= 4) use();
+            }}
           />
-          <Button
-            size="sm"
-            disabled={manual.length < 4}
-            onClick={() => onChange({ player: { slot: 0, name: `id ${manual}`, id: manual }, ue4Id: manual, typed: true })}
-          >
+          <Button size="sm" disabled={manual.length < 4} onClick={use}>
             Use
           </Button>
         </div>
         <span className="tiny faint">
-          For somebody offline, or when a give does not arrive: have them open the pause menu in game — or run{' '}
-          <span className="mono">cheat showadminmanager</span> — and read the <b>Player ID</b> off it. Pasted exactly as
-          shown, letters and all.
+          Nine or ten digits, off the Admin Manager in game — not the long id on the player list.
         </span>
       </div>
 
@@ -323,7 +355,7 @@ function TargetPicker({
       {target ? (
         <div className="row row-wrap" style={{ gap: 8 }}>
           <Badge tone="ok">Gear goes to {target.player.name}</Badge>
-          <span className="tiny faint mono">UE4 id {target.ue4Id}</span>
+          <span className="tiny faint mono">Player ID {target.ue4Id}</span>
           <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
             <Icon.X size={12} /> Clear
           </Button>
@@ -750,6 +782,9 @@ function GiveDialog({
   // would report success and deliver nothing, so it is not offered.
   const canDeliver = Boolean(target && item.path);
   const deliverCommand = canDeliver ? givePlayerCommand(item.path!, target!.ue4Id, qty, quality, blueprint) : null;
+  const plainDeliverCommand = canDeliver
+    ? givePlayerCommandPlain(item.path!, target!.ue4Id, qty, quality, blueprint)
+    : null;
   const consoleCommand = giveSelfCommand(item.gfi, qty, quality, blueprint);
 
   return (
@@ -829,6 +864,12 @@ function GiveDialog({
             <div className="input-group">
               <input className="input input-mono" readOnly value={deliverCommand} onFocus={(e) => e.target.select()} />
               <CopyButton text={deliverCommand} />
+              <Tooltip
+                title="If the give comes back silent"
+                body="Some RCON stacks mangle the single quotes nested inside the double ones, and ARK takes the bare asset path too. Same command, without the Blueprint'…' wrapper."
+              >
+                <CopyButton text={plainDeliverCommand!} label="Copy without the wrapper" />
+              </Tooltip>
             </div>
           </Field>
         ) : null}
