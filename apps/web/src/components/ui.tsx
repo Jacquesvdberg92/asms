@@ -254,12 +254,22 @@ export function Tabs<T extends string>({
   );
 }
 
-export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label = 'Copy',
+  variant = 'ghost',
+  size = 'sm',
+}: {
+  text: string;
+  label?: string;
+  variant?: 'ghost' | 'default' | 'primary';
+  size?: 'sm' | 'md';
+}) {
   const [done, setDone] = useState(false);
   return (
     <Button
-      size="sm"
-      variant="ghost"
+      size={size}
+      variant={variant}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setDone(true);

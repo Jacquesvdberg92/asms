@@ -1479,7 +1479,8 @@ function watchForReady(id: string): void {
 
     if (server.rconEnabled) {
       try {
-        await rconExec(id, 'ListPlayers');
+        // A readiness knock, retried every couple of seconds while a server boots.
+        await rconExec(id, 'ListPlayers', { echo: false });
         return markRunning(id, 'RCON answered');
       } catch {
         /* not up yet */
@@ -1619,7 +1620,36 @@ export async function broadcast(id: string, message: string): Promise<string> {
 
 // ------------------------------------------------------------------- RCON
 
-export async function rconExec(id: string, command: string): Promise<string> {
+/**
+ * ARK's way of saying "I ran that and it printed nothing".
+ *
+ * It is neither an error nor a confirmation, and it is what most admin commands
+ * answer with - including ones that quietly did nothing at all.
+ */
+export const RCON_SILENT = /^\s*server received,\s*but no response!*\s*$/i;
+
+/** How a reply reads in the console, with ARK's silence spelled out. */
+function replyForConsole(reply: string): string {
+  const text = reply.trim();
+  if (!text) return '(no reply)';
+  if (RCON_SILENT.test(text)) return `${text}  (ARK ran it and printed nothing - that is not a confirmation)`;
+  return text;
+}
+
+/**
+ * Run one RCON command.
+ *
+ * Anything a person set off is echoed into that server's console, the command
+ * and its reply both. Without it, pressing Give or Send on the Spawn tab left
+ * no trace anywhere - not in the Console tab, not in the log - so a command
+ * that silently did nothing looked exactly like one that was never sent, and
+ * there was nothing to go back and read afterwards.
+ *
+ * The polls ASMS runs on its own pass `echo: false`: a ListPlayers every few
+ * seconds would bury everything worth reading.
+ */
+export async function rconExec(id: string, command: string, opts: { echo?: boolean } = {}): Promise<string> {
+  const echo = opts.echo !== false;
   const server = need(id);
   if (!server.rconEnabled) throw new Error('RCON is disabled for this server');
   const client = getClient(id, {
@@ -1628,12 +1658,20 @@ export async function rconExec(id: string, command: string): Promise<string> {
     password: server.adminPassword,
   });
   const wasConnected = client.connected;
+  if (echo) pushConsole(id, `> ${command}`, 'sys');
   try {
     const result = await client.exec(command);
     if (!wasConnected) patchRuntime(id, { rconConnected: true });
+    if (echo) {
+      pushConsole(id, replyForConsole(result), result.trim() ? 'out' : 'sys');
+      // The verb only: what people type into the Console tab is their own, and
+      // an admin password pasted into it has no business in a log file.
+      log.info(`rcon ${command.split(/\s+/)[0]} on ${server.name}`);
+    }
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (echo) pushConsole(id, `RCON failed: ${message}`, 'err');
     if (/authentication failed/i.test(message) && runtime(id).identityStale) {
       throw new Error(
         'RCON rejected the admin password. It was changed after this server started, so the running server is still using the old one - restart the server to apply it.',
@@ -1656,7 +1694,8 @@ export function parsePlayers(text: string): PlayerEntry[] {
 }
 
 export async function refreshPlayers(id: string): Promise<PlayerEntry[]> {
-  const text = await rconExec(id, 'ListPlayers');
+  // Polled every few seconds by the runtime watcher, so it stays out of the console.
+  const text = await rconExec(id, 'ListPlayers', { echo: false });
   const players = parsePlayers(text);
   patchRuntime(id, { players: players.length, playerList: players, rconConnected: true });
   return players;

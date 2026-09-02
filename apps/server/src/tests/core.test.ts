@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { parseIni, stringifyIni, getValue, getAll, setValue, setMulti, removeKey } from '../lib/ini.js';
 import { cronMatches, nextRun, validateCron } from '../core/scheduler.js';
-import { parsePlayers } from '../core/servers.js';
+import { parsePlayers, RCON_SILENT } from '../core/servers.js';
 import { RconClient } from '../lib/rcon.js';
 import { CREATURES, ITEMS, KITS, danglingSpawnRefs } from '../core/spawn.js';
+import { worthAnotherRun } from '../lib/steamcmd.js';
 
 // ------------------------------------------------------------------- INI
 
@@ -263,6 +264,43 @@ test('spawn: blueprint paths are rooted and repeat the class name, as ARK expect
 
 test('spawn: no kit is empty', () => {
   for (const kit of KITS) assert.ok(kit.items.length > 0, `${kit.id} is empty`);
+});
+
+// ------------------------------------------------------------------ RCON
+
+test('rcon: ARK\u2019s silent answer is recognised in the shapes it is written in', () => {
+  assert.ok(RCON_SILENT.test('Server received, But no response!!'));
+  assert.ok(RCON_SILENT.test('server received, but no response!'));
+  assert.ok(RCON_SILENT.test('  Server received, But no response!!  '));
+});
+
+test('rcon: a real reply is not mistaken for silence', () => {
+  assert.ok(!RCON_SILENT.test('No Players Connected'));
+  assert.ok(!RCON_SILENT.test('0. Mark, 0002a1b3c4d5e6f7'));
+  assert.ok(!RCON_SILENT.test('Server received, But no response!! and then some'));
+});
+
+// -------------------------------------------------------------- SteamCMD
+
+test('steamcmd: a first run that had not finished unpacking itself is worth another go', () => {
+  // Copied from a real first install, where this failed every brand-new ASMS.
+  const output = [
+    'Connecting anonymously to Steam Public...OK',
+    'Waiting for client config...OK',
+    'Waiting for user info...OK',
+    `ERROR! Failed to install app '2430930' (Missing configuration)`,
+  ].join('\n');
+  assert.equal(worthAnotherRun(output), true);
+});
+
+test('steamcmd: a failure that says something about the app is reported, not retried', () => {
+  assert.equal(worthAnotherRun(`ERROR! Failed to install app '2430930' (No subscription)`), false);
+  assert.equal(worthAnotherRun(`ERROR! Failed to install app '2430930' (Disk write failure)`), false);
+  assert.equal(worthAnotherRun('ERROR! Timed out waiting for AppInfo update.'), false);
+});
+
+test('steamcmd: a run that reported success is never retried', () => {
+  assert.equal(worthAnotherRun(`Success! App '2430930' fully installed.`), false);
 });
 
 /** A port with nothing on it, so a connection is refused rather than hanging. */

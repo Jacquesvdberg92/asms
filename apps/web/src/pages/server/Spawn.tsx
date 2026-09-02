@@ -183,6 +183,13 @@ export default function Spawn({ server, runtime }: { server: ServerInstance; run
 
 const NO_REPLY = '(no reply — ARK stays quiet on most admin commands, which is not the same as "it worked")';
 
+/**
+ * ARK's stock answer when a command produced no output. It is not an error and
+ * not a confirmation, and reading it as either is how "nothing happened" gets
+ * mistaken for "the server is broken".
+ */
+const ARK_SILENT = /^\s*server received,\s*but no response!*\s*$/i;
+
 interface BatchResult {
   command: string;
   response: string;
@@ -248,10 +255,14 @@ function TargetPicker({
     if (!res.ue4Id) {
       // The command answered, but with nothing that looks like an id - some
       // builds word this differently. Saying so beats a button that shrugs.
+      // Not the player's fault and not a bug to chase: GetPlayerIDForSteamID
+      // is an Evolved-era command that expects a Steam id, and Ascended lists
+      // players by their EOS id instead. So say where the number really comes
+      // from rather than implying the pick was wrong.
       toast(
         'warn',
-        `Could not find an internal id for ${player.name}`,
-        `The server replied "${res.response.trim() || 'nothing at all'}". Paste their UE4 id below if you know it.`,
+        `ARK would not translate ${player.name}'s id`,
+        `It replied "${res.response.trim() || 'nothing at all'}". Ascended lists players by EOS id, which GetPlayerIDForSteamID cannot convert. Have them open the pause menu — or run "cheat showadminmanager" in game — read the Player ID off it, and paste it below.`,
       );
       onChange(null);
       return;
@@ -351,6 +362,14 @@ function ReplyCard({ reply, onClear }: { reply: { cmd: string; text: string }; o
             </div>
           ))}
         </div>
+        {reply.text.split(/\r?\n/).some((line) => ARK_SILENT.test(line)) ? (
+          <p className="tiny faint" style={{ marginTop: 8 }}>
+            <b>Server received, But no response!!</b> is ARK saying it ran the command and printed nothing. It is the
+            normal answer to most admin commands — and it is also what you get when a command could not do anything,
+            such as a GMSummon with nobody standing anywhere to spawn at. Every command and reply is also written to
+            the <b>Console</b> tab now, so there is a record to go back to.
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -520,24 +539,37 @@ function SummonDialog({
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
-            <CopyButton text={asConsole(command)} label="Copy for the in-game console" />
             <Tooltip
-              title="Worth a try, rarely lands"
-              body="ARK spawns this at whoever ran the command, and RCON is nobody. The reply is shown either way, so you will know."
+              title="This almost never lands"
+              body="GMSummon puts the creature down at whoever ran it, and an RCON session is not standing anywhere on the map. ARK replies “Server received, But no response!!” and nothing appears. Left here because the reply is always shown, so you can see for yourself."
             >
               <Button
-                variant="primary"
+                variant="ghost"
                 disabled={!ready}
                 busy={pending === command}
                 onClick={() => (creature.boss ? setConfirmBoss(true) : fire())}
               >
-                Send over RCON
+                Try over RCON anyway
               </Button>
             </Tooltip>
+            <CopyButton variant="primary" size="md" text={asConsole(command)} label="Copy for the in-game console" />
           </>
         }
       >
         <div className="stack">
+          <Callout tone="info" title="Creatures have to be spawned from inside the game">
+            <p>
+              Copy the line below, open the in-game console with <b>Tab</b> and paste it. GMSummon places the creature
+              at whoever ran the command, so it has to be run by somebody standing where you want it — sending it down
+              RCON gets <span className="mono">Server received, But no response!!</span> and nothing appears.
+            </p>
+            <p>
+              To hand a tamed one to somebody else: spawn it, have them look straight at it and run{' '}
+              <span className="mono">cheat GiveToMe</span>. If they are not an admin, take them into your tribe for the
+              moment it takes.
+            </p>
+          </Callout>
+
           {creature.boss ? (
             <Callout tone="warn" title="This one is a boss">
               Bosses arrive at full strength and do not care whose base they landed in. On a creative server that is
