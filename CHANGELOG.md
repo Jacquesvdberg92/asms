@@ -2,7 +2,10 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
-## [Unreleased]
+## [0.3.1] — 2026-09-02
+
+Every page with a switch on it could be scrolled off the screen entirely, sidebar and all, into
+blank space below. One missing CSS property, present since the first public release.
 
 ### Fixed
 - **You could scroll the whole app off the screen into blank space.** Every page with a switch on it
