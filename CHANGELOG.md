@@ -2,6 +2,52 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.8] — 2026-09-03
+
+The backup page had one button and it exported everything — including every password on the
+machine. Which made it the wrong thing to reach for when all someone wants is to say "here is what
+I'm running".
+
+### Added
+- **Just the mod list, as its own export.** A card on Backup & migrate that writes out the mods and
+  nothing else — no passwords, no ports, no install paths — so the file is safe to send to a
+  co-admin, paste in Discord, or keep beside your notes. Pick every server and the library at once,
+  one server, or the library on its own
+- **Three shapes, because three things get asked for.** *ASMS list* is Name,ID,URL rows, which paste
+  straight back into any server's Mods tab or into the library — a list exported on one machine goes
+  onto another as one paste. *Project IDs only* is the bare comma-separated numbers a launch line
+  and other server managers want. *Markdown for a post* writes names, links and load order out for
+  Discord, a forum or a README
+- The list is on screen before you commit to it, with a Copy button beside the download for when it
+  is going straight into a chat window
+- **Mods that are switched off are handled honestly.** Neither text format has an on/off field, so a
+  disabled mod left in one comes back enabled wherever it is pasted. ASMS says so, and offers to
+  leave them out; Markdown keeps them and marks them
+
+### Changed
+- Merging several servers into one list says what it did — every mod once, in the order the first
+  list had it — and points at the single-server option, because a load order is per server and two
+  of them cannot both survive the merge
+- Mod lists may now carry `#` comment lines, and the paste boxes skip them. That is what lets an
+  exported file open with a line saying where it came from and still import cleanly
+
+### Fixed
+- **Three cryopod switches said they were on when the server had never heard of them.** ARK does
+  not write `DisableCryopodEnemyCheck`, `DisableCryopodFridgeRequirement` or
+  `AllowCryoFridgeOnSaddle` into GameUserSettings.ini, so the catalogue audit had no real default
+  to read and assumed the permissive one. A default is what the Settings page shows when the key is
+  absent from the file — so the page reported the fridge requirement lifted while the server, having
+  read nothing, still answered *Cannot Deploy: No Nearby CryoFridge Ready*. Worse, the toggle could
+  not be turned on to fix it: Save sends only the controls you changed, and one already showing the
+  value you want never counts as changed. All three now default to off, as a stock server has them,
+  so switching one on is a real edit that lands in the file
+- **The warning about editing a running server was in the wrong place and gave the wrong order.**
+  It appeared only once something had already been edited, at the bottom of the card, and told people
+  to restart afterwards — which is exactly what loses the save, because ARK writes GameUserSettings.ini
+  back out from its own memory as it shuts down. The warning now stands at the top of Game settings and
+  of Raw INI for as long as the server is running, and says the one order that works: stop, save, start.
+  The toast after a save no longer sends anyone off to restart
+
 ## [0.3.7] — 2026-09-03
 
 "I don't see a tame rate" — because Taming speed sat under **Rates**, one line below Harvest

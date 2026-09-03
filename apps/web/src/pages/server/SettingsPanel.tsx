@@ -89,8 +89,32 @@ export default function SettingsPanel({ server, runtime }: { server: ServerInsta
           onShowSettings={() => pick('game')}
         />
       ) : null}
-      {sub === 'raw' ? <RawIni server={server} /> : null}
+      {sub === 'raw' ? <RawIni server={server} runtime={runtime} /> : null}
     </div>
+  );
+}
+
+/**
+ * The one thing about ARK's INI files that costs people an evening.
+ *
+ * ARK reads GameUserSettings.ini at boot and writes it back out from memory on
+ * the way down - the `;METADATA=(Diff=true...)` header at the top of the file is
+ * the engine's own note that it owns it. So a save made while the server is up
+ * lands on disk and is then overwritten by the shutdown, and the next boot reads
+ * the old values back. Saving first does not help, and restarting is the very
+ * thing that destroys it. Stopping first is the only order that works.
+ *
+ * Shown for as long as the server is running rather than only once something is
+ * edited: by the time there are unsaved changes the wasted work has been done.
+ */
+function IniRewriteWarning({ runtime }: { runtime?: ServerRuntime }) {
+  if (runtime?.state !== 'running') return null;
+  return (
+    <Callout tone="warn" title="Stop the server before saving">
+      ARK read these files when it booted, and writes them back out from its own memory when it stops. Anything saved here
+      while it is running is overwritten on the way down — saving does not protect it, and restarting is what throws it
+      away. Stop the server with the button above, save, then start it again.
+    </Callout>
   );
 }
 
@@ -176,7 +200,11 @@ function GameSettings({
       await api.put(`/servers/${server.id}/config`, { curated: patch });
       setOriginal(values);
       if (runtime?.state === 'running') {
-        toast('info', 'Saved — restart to apply', 'ARK only reads these files at boot.');
+        toast(
+          'warn',
+          'Saved, but this server is running',
+          'ARK overwrites these files when it stops, so stopping now would undo what was just written. Stop the server, save again, then start it.',
+        );
       }
     }, 'Settings written to disk');
 
@@ -203,8 +231,8 @@ function GameSettings({
         <Icon.Sliders />
         <h3>Game settings</h3>
         <Help
-          title="These take effect on the next start"
-          body="ARK reads its INI files only when it boots, and rewrites them when it shuts down. Edit while the server is stopped, or restart afterwards."
+          title="Edit these while the server is stopped"
+          body="ARK reads its INI files only when it boots, and writes them back out when it shuts down. A save made while the server is running is overwritten by that shutdown, so stop it first rather than restarting afterwards."
         />
         <div className="spacer" />
         <Toggle
@@ -230,6 +258,12 @@ function GameSettings({
           ))}
         </div>
       )}
+
+      {runtime?.state === 'running' ? (
+        <div className="card-body" style={{ paddingBottom: 0 }}>
+          <IniRewriteWarning runtime={runtime} />
+        </div>
+      ) : null}
 
       <div className="card-body">
         {visible.length === 0 && flagHits.length === 0 ? (
@@ -274,15 +308,6 @@ function GameSettings({
               </div>
             </div>
           ))}
-        </div>
-      ) : null}
-
-      {dirty.length && runtime?.state === 'running' ? (
-        <div className="card-body" style={{ borderTop: '1px solid var(--line)' }}>
-          <Callout tone="warn" title="This server is running">
-            Saving writes the INI files, but ARK read them at boot and rewrites them on shutdown — so the change does nothing
-            until you restart, and a restart without saving first would throw these edits away.
-          </Callout>
         </div>
       ) : null}
 
@@ -667,7 +692,7 @@ function ServerSettings({
 
 // ------------------------------------------------------------------ raw ini
 
-function RawIni({ server }: { server: ServerInstance }) {
+function RawIni({ server, runtime }: { server: ServerInstance; runtime?: ServerRuntime }) {
   const [busy, run] = useAction();
   const [which, setWhich] = useState<'gus' | 'game'>('gus');
   const [files, setFiles] = useState<Record<string, { path: string; text: string }>>({});
@@ -709,11 +734,11 @@ function RawIni({ server }: { server: ServerInstance }) {
         </div>
       </div>
       <div className="card-body stack">
+        <IniRewriteWarning runtime={runtime} />
         <div className="small faint mono truncate">{files[which]?.path}</div>
         <textarea className="textarea" style={{ minHeight: '48vh' }} value={text} spellCheck={false} onChange={(e) => setText(e.target.value)} />
         <span className="tiny faint">
-          ASMS keeps a <span className="mono">.asms.bak</span> copy next to the file on every save. ARK rewrites these files when it shuts
-          down, so edit while the server is stopped.
+          ASMS keeps a <span className="mono">.asms.bak</span> copy next to the file on every save.
         </span>
       </div>
       <div className="card-foot">

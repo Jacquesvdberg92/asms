@@ -411,9 +411,16 @@ export const SETTINGS: SettingDef[] = [
   },
 
   // ------------------------------------------------------------ cryopods
-  flag('DisableCryopodEnemyCheck', 'Throw pods near enemies', 'Cryopods', 'True', 'Off means a pod cannot be thrown while an enemy is nearby.'),
-  flag('DisableCryopodFridgeRequirement', 'No fridge needed to deploy', 'Cryopods', 'True', 'Off means a pod only works within range of a powered cryofridge.'),
-  flag('AllowCryoFridgeOnSaddle', 'Cryofridges on platform saddles', 'Cryopods', 'True'),
+  // ARK never writes these three into GameUserSettings.ini, so the audit had no
+  // real default to read and assumed the permissive one. A default is what the
+  // Settings page shows when the key is absent from the file, so an assumed True
+  // told everyone the fridge requirement was already lifted while the server,
+  // reading nothing, still enforced it - and the toggle could never be saved,
+  // because a control already showing the wanted value is never dirty. All three
+  // are off in a stock server.
+  flag('DisableCryopodEnemyCheck', 'Throw pods near enemies', 'Cryopods', 'False', 'Off means a pod cannot be thrown while an enemy is nearby.'),
+  flag('DisableCryopodFridgeRequirement', 'No fridge needed to deploy', 'Cryopods', 'False', 'Off means a pod only works within range of a powered cryofridge.'),
+  flag('AllowCryoFridgeOnSaddle', 'Cryofridges on platform saddles', 'Cryopods', 'False'),
   flag('EnableCryoSicknessPVE', 'Cryo sickness on PvE', 'Cryopods', 'False', 'Gives a creature the usual torpor after coming out of a pod on a PvE server too.'),
   flag('EnableCryopodNerf', 'Cryopod nerf', 'Cryopods', 'False', 'Turns on the three settings below, which weaken a creature for a while after it is let out.'),
   {

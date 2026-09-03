@@ -4,6 +4,7 @@ import { TopBar } from '../components/Shell';
 import { Badge, Callout, Empty } from '../components/ui';
 import { Icon } from '../components/Icons';
 import { BackupMigrate } from '../components/BackupMigrate';
+import { ModListExport } from '../components/ModListExport';
 import { dateTime } from '../lib/format';
 
 /**
@@ -32,6 +33,8 @@ export default function Backup() {
         </Callout>
 
         <BackupMigrate />
+
+        <ModListExport />
 
         <div className="card">
           <div className="card-head">

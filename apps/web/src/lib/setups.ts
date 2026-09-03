@@ -40,8 +40,8 @@ export function fileNameFor(bundle: SetupBundle): string {
 }
 
 /** Hand the browser a file without a round trip through the server. */
-export function downloadJson(filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+export function downloadText(filename: string, text: string, type = 'text/plain;charset=utf-8'): void {
+  const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -50,6 +50,10 @@ export function downloadJson(filename: string, data: unknown): void {
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+export function downloadJson(filename: string, data: unknown): void {
+  downloadText(filename, JSON.stringify(data, null, 2), 'application/json');
 }
 
 export function readJsonFile(file: File): Promise<unknown> {

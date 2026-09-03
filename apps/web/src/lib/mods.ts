@@ -11,10 +11,12 @@ const blank = (id: string): ModEntry => ({ id, name: '', author: '', url: '', en
  *   893657, 928567 941697
  *   Better Breeding,941697,https://www.curseforge.com/.../better-breeding
  *   Name,ID,URL;Name,ID,URL
+ *   # a line opening with a hash is a note, and is skipped
  *
  * One entry per line or per semicolon; commas separate the fields within an
  * entry. Whichever field looks like an id is the id, so the column order in
- * someone else's export does not matter.
+ * someone else's export does not matter. Comment lines are what let an
+ * exported list say what it is at the top and still paste straight back in.
  */
 export function parseModList(text: string): ModEntry[] {
   const out: ModEntry[] = [];
@@ -24,6 +26,7 @@ export function parseModList(text: string): ModEntry[] {
   };
 
   for (const chunk of text.split(/[;\n\r]+/)) {
+    if (chunk.trim().startsWith('#')) continue;
     // A run of bare ids, however they happen to be separated.
     const tokens = chunk.split(/[\s,]+/).filter(Boolean);
     if (tokens.length && tokens.every((token) => ID.test(token))) {
