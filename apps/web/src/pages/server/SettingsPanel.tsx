@@ -6,7 +6,9 @@ import { Button, Field, Toggle, Badge, Callout, SearchInput } from '../../compon
 import { Icon } from '../../components/Icons';
 import { Help } from '../../components/Tooltip';
 import { ClusterIdInput } from '../../components/ClusterIdInput';
+import { MapPicker } from '../../components/MapPicker';
 import { checkInstallPath } from '../../lib/paths';
+import { mapCodeError } from '../../lib/maps';
 import { PresetGrid, resolvePresetValues } from '../../components/Presets';
 import { SaveSetupDialog } from '../Setups';
 import type { PresetDef, ServerInstance, ServerRuntime, SettingDef } from '../../lib/types';
@@ -358,11 +360,13 @@ function ServerSettings({ server, highlightFlag }: { server: ServerInstance; hig
 
   const set = <K extends keyof ServerInstance>(key: K, value: ServerInstance[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const dirty = JSON.stringify(draft) !== JSON.stringify(server);
+  // A half-typed custom map code would be saved as the level ARK boots.
+  const mapError = mapCodeError(draft.map);
   const activeFlagCount = Object.values(draft.flags as unknown as Record<string, boolean>).filter(Boolean).length;
 
   const save = () =>
     void run(async () => {
-      await api.patch(`/servers/${server.id}`, draft);
+      await api.patch(`/servers/${server.id}`, { ...draft, map: draft.map.trim() });
     }, 'Server updated — restart to apply');
 
   return (
@@ -380,13 +384,7 @@ function ServerSettings({ server, highlightFlag }: { server: ServerInstance; hig
             <input className="input" value={draft.sessionName} onChange={(e) => set('sessionName', e.target.value)} />
           </Field>
           <Field label="Map">
-            <select className="select" value={draft.map} onChange={(e) => set('map', e.target.value)}>
-              {(catalog?.maps ?? []).map((m) => (
-                <option key={m.code} value={m.code}>
-                  {m.name} ({m.code})
-                </option>
-              ))}
-            </select>
+            <MapPicker maps={catalog?.maps ?? []} value={draft.map} onChange={(code) => set('map', code)} />
           </Field>
           <Field label="Player slots" help="Written as -WinLiveMaxPlayers, which is what ASA actually honours.">
             <input className="input" type="number" min={1} max={255} value={draft.maxPlayers} onChange={(e) => set('maxPlayers', Number(e.target.value))} />
@@ -525,7 +523,7 @@ function ServerSettings({ server, highlightFlag }: { server: ServerInstance; hig
           <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(server)}>
             Discard
           </Button>
-          <Button variant="primary" busy={busy} disabled={!dirty} onClick={save}>
+          <Button variant="primary" busy={busy} disabled={!dirty || !!mapError} onClick={save}>
             <Icon.Save /> Save
           </Button>
         </div>

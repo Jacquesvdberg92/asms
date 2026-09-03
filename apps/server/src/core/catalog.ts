@@ -22,6 +22,8 @@ export const MAPS: MapDef[] = [
   { code: 'Astraeos_WP', name: 'Astraeos', official: true },
   { code: 'Ragnarok_WP', name: 'Ragnarok', official: true },
   { code: 'Valguero_WP', name: 'Valguero', official: true },
+  { code: 'Genesis_WP', name: 'Genesis Part 1', official: true },
+  { code: 'LostColony_WP', name: 'Lost Colony', official: true, note: 'Paid expansion - players need to own it before they can join.' },
   { code: 'Svartalfheim_WP', name: 'Svartalfheim', official: false, note: 'Community map - also add its mod id under Mods' },
   { code: 'Amissa_WP', name: 'Amissa', official: false, note: 'Community map - also add its mod id under Mods' },
 ];

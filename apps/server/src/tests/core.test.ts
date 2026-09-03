@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { parseIni, stringifyIni, getValue, getAll, setValue, setMulti, removeKey } from '../lib/ini.js';
 import { cronMatches, nextRun, validateCron } from '../core/scheduler.js';
-import { parsePlayers, parseArkIds, RCON_SILENT } from '../core/servers.js';
+import { parsePlayers, parseArkIds, RCON_SILENT, assertMapSafe } from '../core/servers.js';
 import { RconClient } from '../lib/rcon.js';
 import { CREATURES, ITEMS, KITS, danglingSpawnRefs } from '../core/spawn.js';
 import { worthAnotherRun } from '../lib/steamcmd.js';
@@ -309,6 +309,21 @@ test('players: the newest line wins when an id has been recorded more than once'
     'AdminCmd: b (PlayerName: New, ARKID: 222222222, PlatformID: aabbcc)',
   ].join('\n');
   assert.deepEqual(parseArkIds(text).aabbcc, { name: 'New', arkId: '222222222' });
+});
+
+// ------------------------------------------------------------------- maps
+
+test('maps: a code for a map ASMS has never heard of is accepted', () => {
+  assertMapSafe('Nyrandil_WP');
+  assertMapSafe(' Svartalfheim_WP ');
+  // Nothing was sent, so there is nothing to check.
+  assertMapSafe(undefined);
+});
+
+test('maps: a code that would split ARK’s command line is refused', () => {
+  for (const bad of ['TheIsland_WP?listen', 'The Island', '', '   ', '/Game/Maps/TheIsland_WP', 'Map;calc']) {
+    assert.throws(() => assertMapSafe(bad), /not a map code/);
+  }
 });
 
 // -------------------------------------------------------------- SteamCMD

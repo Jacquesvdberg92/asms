@@ -246,6 +246,23 @@ export function assertLaunchSafe(patch: Partial<ServerInstance>): void {
 }
 
 /**
+ * The map code leads ARK's command line - `TheIsland_WP?listen?Port=7777` -
+ * and everything after it is split on `?`. Since the map picker learned to
+ * take a code for a map ASMS has never heard of, a space or a question mark in
+ * that box would quietly become a different option rather than a bad map.
+ */
+const MAP_CODE = /^[A-Za-z0-9_]+$/;
+
+export function assertMapSafe(map: string | undefined): void {
+  if (map === undefined) return;
+  if (!MAP_CODE.test(map.trim())) {
+    throw new Error(
+      `"${map}" is not a map code. ARK reads it as the first thing on the command line, so it can only be letters, digits and underscores - the way TheIsland_WP is.`,
+    );
+  }
+}
+
+/**
  * A too-long install folder does not fail loudly - the server installs, boots
  * and runs, and only mod downloads die, deep in a log nobody reads. Catching it
  * at the point the path is chosen is the only place it is cheap to fix.
@@ -1014,6 +1031,7 @@ export function activeModIds(server: ServerInstance): string[] {
 
 export async function create(input: Partial<ServerInstance>): Promise<ServerInstance> {
   assertLaunchSafe(input);
+  assertMapSafe(input.map);
   const cfg = settings();
   const taken = list().flatMap((s) => [s.port, s.port + 1, s.queryPort, s.rconPort]);
   const name = (input.name ?? 'New Server').trim();
@@ -1025,7 +1043,7 @@ export async function create(input: Partial<ServerInstance>): Promise<ServerInst
   const server: ServerInstance = {
     id: newId('srv_'),
     name,
-    map: input.map ?? 'TheIsland_WP',
+    map: input.map?.trim() || 'TheIsland_WP',
     installPath,
     sessionName: input.sessionName?.trim() || name,
     serverPassword: input.serverPassword ?? '',
@@ -1063,9 +1081,11 @@ export async function create(input: Partial<ServerInstance>): Promise<ServerInst
 export function update(id: string, patch: Partial<ServerInstance>): ServerInstance {
   const server = need(id);
   assertLaunchSafe(patch);
+  assertMapSafe(patch.map);
   if (patch.installPath !== undefined) assertInstallPathSafe(patch.installPath.trim());
   const { id: _ignored, createdAt: _created, ...rest } = patch;
   Object.assign(server, rest, { updatedAt: Date.now() });
+  if (patch.map !== undefined) server.map = patch.map.trim();
   if (patch.flags) server.flags = { ...defaultFlags(), ...patch.flags };
   if (patch.mods) server.mods = normaliseMods(patch.mods);
   forgetModStatus(id);

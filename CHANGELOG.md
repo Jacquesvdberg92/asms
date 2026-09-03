@@ -2,6 +2,31 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.6] — 2026-09-03
+
+The map list was written when ARK had eight Ascended maps. It has ten - and the dropdown was the
+only way to name a map, so a map it had never heard of could not be run at all.
+
+### Added
+- **Genesis Part 1 and Lost Colony are in the map dropdown.** Both are already inside the dedicated
+  server download — `Genesis_WP` and `LostColony_WP` sit in a stock install alongside Ragnarok
+  and Valguero — so there is nothing extra to download and no mod id to add. ASMS simply never
+  offered them. Lost Colony is the paid expansion, and the dropdown says so: a player who does not
+  own it cannot join a server running it
+- **"Other" takes the code for any map at all.** Mod maps outnumber the official ones many times
+  over and none of them were reachable — the dropdown was the whole list. Picking **Other** now
+  opens a box for the level name, in the wizard and in each server’s settings alike
+- A server already sitting on a code ASMS does not list — an imported archive, a catalogue that has
+  since moved on — opens in that box with its code in it, rather than showing an empty dropdown
+  where one click on any map was the only way out, to a different one
+
+### Fixed
+- **A map code cannot smuggle options onto ARK’s command line.** It leads the line —
+  `TheIsland_WP?listen?Port=7777` — and everything after it is split on `?`, so now that the code is
+  free text it is checked before it is saved: letters, digits and underscores, the way every real
+  map code is. Both the form and the API say no, rather than the server booting somewhere nobody
+  asked for
+
 ## [0.3.5] — 2026-09-02
 
 0.3.4 asked you to go and look the Player ID up yourself. The server had been writing it down in

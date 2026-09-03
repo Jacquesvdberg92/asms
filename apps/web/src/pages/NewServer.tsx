@@ -11,8 +11,10 @@ import { modLabel, modSearchLink, parseModList } from '../lib/mods';
 import { ModSources } from '../components/ModSources';
 import { LibraryPicker } from '../components/LibraryPicker';
 import { ClusterIdInput } from '../components/ClusterIdInput';
+import { MapPicker } from '../components/MapPicker';
 import { randomClusterId } from '../lib/cluster';
 import { checkInstallPath } from '../lib/paths';
+import { mapCodeError } from '../lib/maps';
 import type { ModEntry, ServerInstance } from '../lib/types';
 
 interface Draft {
@@ -124,13 +126,16 @@ export default function NewServer() {
 
   // Blocked on the step that owns the folder, not at submit: a wizard that lets
   // you reach Review and then refuses has wasted four steps of typing.
-  const canAdvance = step === 0 ? draft.name.trim().length > 0 && pathCheck.level !== 'blocked' : true;
+  const canAdvance =
+    step === 0
+      ? draft.name.trim().length > 0 && pathCheck.level !== 'blocked' && !mapCodeError(draft.map)
+      : true;
 
   const create = () =>
     void run(async () => {
       const payload: Partial<ServerInstance> = {
         name: draft.name.trim(),
-        map: draft.map,
+        map: draft.map.trim(),
         installPath: draft.installPath.trim() || undefined,
         sessionName: draft.sessionName.trim() || draft.name.trim(),
         serverPassword: draft.serverPassword,
@@ -201,26 +206,8 @@ export default function NewServer() {
                   />
                 </Field>
                 <Field label="Map">
-                  <select className="select" value={draft.map} onChange={(e) => set('map', e.target.value)}>
-                    <optgroup label="Official">
-                      {catalog?.maps.filter((m) => m.official).map((m) => (
-                        <option key={m.code} value={m.code}>
-                          {m.name} ({m.code})
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Community">
-                      {catalog?.maps.filter((m) => !m.official).map((m) => (
-                        <option key={m.code} value={m.code}>
-                          {m.name} ({m.code})
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
+                  <MapPicker maps={catalog?.maps ?? []} value={draft.map} onChange={(code) => set('map', code)} />
                 </Field>
-                {catalog?.maps.find((m) => m.code === draft.map)?.note ? (
-                  <div className="small faint">{catalog.maps.find((m) => m.code === draft.map)?.note}</div>
-                ) : null}
                 <Field
                   label="Install folder"
                   help={`Leave blank to use ${suggestedPath || 'the default install root'}. Each server needs its own folder — around 30 GB.`}
