@@ -68,8 +68,8 @@ export function Toggle({
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
-  title?: string;
-  help?: string;
+  title?: React.ReactNode;
+  help?: React.ReactNode;
   disabled?: boolean;
 }) {
   return (

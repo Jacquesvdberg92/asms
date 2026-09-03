@@ -334,6 +334,26 @@
   animation: flash-in 1.6s ease-out;
 }
 
+/* ------------------------------------------------------------ launch flags */
+/* Forty switches in one card: without a box around each one, a long help line
+   runs into the next flag's title and the whole card reads as one paragraph. */
+.flag-group { display: flex; flex-direction: column; gap: 9px; }
+.flag-group-head { display: flex; align-items: center; gap: 10px; }
+.flag-group-rule { flex: 1; height: 1px; background: var(--line); }
+.flag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 8px; }
+.flag-card {
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2);
+  padding: 11px 13px; transition: border-color 0.14s ease, background 0.14s ease;
+}
+.flag-card:hover { border-color: var(--line-strong); }
+.flag-card.on { border-color: var(--accent-line); background: var(--accent-soft); }
+.flag-card .toggle { align-items: flex-start; width: 100%; }
+.flag-card .toggle-track { margin-top: 2px; }
+.flag-card .toggle-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.flag-card .toggle-title .badge { padding: 1px 7px; font-size: 10.5px; }
+.flag-arg { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin: 3px 0 2px; }
+.flag-help { display: block; font-size: 11.5px; color: var(--text-faint); line-height: 1.45; }
+
 /* ------------------------------------------------------------ ordered help */
 
 .steps-list { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; }

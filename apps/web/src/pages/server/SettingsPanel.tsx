@@ -26,10 +26,20 @@ export default function SettingsPanel({ server, runtime }: { server: ServerInsta
   const [params, setParams] = useSearchParams();
   const wanted = params.get('sub');
   const [sub, setSub] = useState<SubTab>(wanted === 'server' || wanted === 'raw' ? wanted : 'game');
+  // One box above the tabs rather than one inside Game settings: a launch flag
+  // and an INI setting are the same question to whoever is looking, and the
+  // answer used to be findable from only one of the two tabs.
+  const [search, setSearch] = useState(params.get('find') ?? '');
 
   useEffect(() => {
     if (wanted === 'game' || wanted === 'server' || wanted === 'raw') setSub(wanted);
   }, [wanted]);
+
+  // Arriving from the palette a second time has to move the box again.
+  const deepLink = params.get('find');
+  useEffect(() => {
+    if (deepLink) setSearch(deepLink);
+  }, [deepLink]);
 
   const pick = (next: SubTab) => {
     setSub(next);
@@ -40,21 +50,45 @@ export default function SettingsPanel({ server, runtime }: { server: ServerInsta
 
   return (
     <div className="stack">
-      <div className="segmented">
-        <button className={sub === 'game' ? 'active' : ''} onClick={() => pick('game')}>
-          Game settings
-        </button>
-        <button className={sub === 'server' ? 'active' : ''} onClick={() => pick('server')}>
-          Server &amp; launch
-        </button>
-        <button className={sub === 'raw' ? 'active' : ''} onClick={() => pick('raw')}>
-          Raw INI
-        </button>
+      <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div className="segmented">
+          <button className={sub === 'game' ? 'active' : ''} onClick={() => pick('game')}>
+            Game settings
+          </button>
+          <button className={sub === 'server' ? 'active' : ''} onClick={() => pick('server')}>
+            Server &amp; launch
+          </button>
+          <button className={sub === 'raw' ? 'active' : ''} onClick={() => pick('raw')}>
+            Raw INI
+          </button>
+        </div>
+        <div className="spacer" />
+        {sub === 'raw' ? null : (
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            width={300}
+            placeholder="Search settings and launch flags…"
+          />
+        )}
       </div>
       {sub === 'game' ? (
-        <GameSettings server={server} runtime={runtime} find={params.get('find') ?? ''} onShowLaunch={() => pick('server')} />
+        <GameSettings
+          server={server}
+          runtime={runtime}
+          search={search}
+          onSearch={setSearch}
+          onShowLaunch={() => pick('server')}
+        />
       ) : null}
-      {sub === 'server' ? <ServerSettings server={server} highlightFlag={params.get('flag') ?? ''} /> : null}
+      {sub === 'server' ? (
+        <ServerSettings
+          server={server}
+          highlightFlag={params.get('flag') ?? ''}
+          search={search}
+          onShowSettings={() => pick('game')}
+        />
+      ) : null}
       {sub === 'raw' ? <RawIni server={server} /> : null}
     </div>
   );
@@ -65,13 +99,15 @@ export default function SettingsPanel({ server, runtime }: { server: ServerInsta
 function GameSettings({
   server,
   runtime,
-  find,
+  search,
+  onSearch,
   onShowLaunch,
 }: {
   server: ServerInstance;
   runtime?: ServerRuntime;
-  /** Pre-filled from a search, so the palette can land on one setting. */
-  find: string;
+  /** Owned by the panel above, so the same box serves both tabs. */
+  search: string;
+  onSearch: (value: string) => void;
   onShowLaunch: () => void;
 }) {
   const { catalog, toast } = useStore();
@@ -79,14 +115,8 @@ function GameSettings({
   const [values, setValues] = useState<Record<string, string>>({});
   const [original, setOriginal] = useState<Record<string, string>>({});
   const [group, setGroup] = useState('Rates');
-  const [search, setSearch] = useState(find);
   const [advanced, setAdvanced] = useState(false);
   const [preset, setPreset] = useState('');
-
-  // Arriving from the palette a second time has to move the box again.
-  useEffect(() => {
-    if (find) setSearch(find);
-  }, [find]);
 
   const load = useCallback(
     () =>
@@ -135,7 +165,7 @@ function GameSettings({
   const applyPreset = (chosen: PresetDef) => {
     setValues((prev) => ({ ...prev, ...resolvePresetValues(chosen, defs) }));
     setPreset(chosen.id);
-    setSearch('');
+    onSearch('');
     toast('info', `${chosen.name} loaded`, 'Nothing is written yet — look through the changes, then press Save.');
   };
 
@@ -177,13 +207,6 @@ function GameSettings({
           body="ARK reads its INI files only when it boots, and rewrites them when it shuts down. Edit while the server is stopped, or restart afterwards."
         />
         <div className="spacer" />
-        <SearchInput
-          value={search}
-          onChange={setSearch}
-          width={260}
-          placeholder="Search every setting…"
-          hint={search ? `${visible.length} found` : undefined}
-        />
         <Toggle
           checked={advanced}
           onChange={setAdvanced}
@@ -195,7 +218,7 @@ function GameSettings({
       {search ? (
         <div className="card-head" style={{ gap: 8 }}>
           <span className="small faint">
-            Searching all {defs.length} settings in every group, advanced ones included. Clear the box to browse by group.
+            {visible.length} of {defs.length} settings match, advanced ones included. Clear the box to browse by group.
           </span>
         </div>
       ) : (
@@ -338,7 +361,17 @@ function SettingRow({
 
 // ---------------------------------------------------------- server & launch
 
-function ServerSettings({ server, highlightFlag }: { server: ServerInstance; highlightFlag: string }) {
+function ServerSettings({
+  server,
+  highlightFlag,
+  search,
+  onShowSettings,
+}: {
+  server: ServerInstance;
+  highlightFlag: string;
+  search: string;
+  onShowSettings: () => void;
+}) {
   const { catalog } = useStore();
   const [busy, run] = useAction();
   const navigate = useNavigate();
@@ -362,6 +395,21 @@ function ServerSettings({ server, highlightFlag }: { server: ServerInstance; hig
   const dirty = JSON.stringify(draft) !== JSON.stringify(server);
   // A half-typed custom map code would be saved as the level ARK boots.
   const mapError = mapCodeError(draft.map);
+
+  const needle = search.trim().toLowerCase();
+  const flags = useMemo(() => {
+    const all = catalog?.launchFlags ?? [];
+    if (!needle) return all;
+    return all.filter((f) => `${f.label} ${f.arg} ${f.help}`.toLowerCase().includes(needle));
+  }, [catalog, needle]);
+  // The mirror of what Game settings does for flags: a search that finds an INI
+  // setting from this tab says so and offers the door, rather than nothing.
+  const settingHits = useMemo(() => {
+    if (!needle) return [];
+    return (catalog?.settings ?? []).filter((d) =>
+      `${d.label} ${d.key} ${d.help ?? ''}`.toLowerCase().includes(needle),
+    );
+  }, [catalog, needle]);
   const activeFlagCount = Object.values(draft.flags as unknown as Record<string, boolean>).filter(Boolean).length;
 
   const save = () =>
@@ -454,34 +502,95 @@ function ServerSettings({ server, highlightFlag }: { server: ServerInstance; hig
             body="These go on ARK's command line rather than into an INI file, which is why they are here and not under Game settings. The full command is shown on the Overview tab."
           />
           <div className="spacer" />
-          <span className="card-hint">{activeFlagCount} on</span>
+          <span className="card-hint">
+            {needle ? `${flags.length} of ${catalog?.launchFlags?.length ?? 0} match · ` : ''}
+            {activeFlagCount} on
+          </span>
         </div>
         <div className="card-body stack">
+          {needle && !flags.length ? (
+            <Callout tone="info" title={`No launch flag matches “${search}”`}>
+              Flags are the switches ARK takes on its command line. If what you are after is a rate or a rule, it is an INI
+              setting — look under <span className="strong">Game settings</span>.
+            </Callout>
+          ) : null}
           {(catalog?.launchFlagGroups ?? []).map((group) => {
-            const inGroup = (catalog?.launchFlags ?? []).filter((f) => f.group === group);
+            const inGroup = flags.filter((f) => f.group === group);
             if (!inGroup.length) return null;
+            const onHere = inGroup.filter((f) => (draft.flags as unknown as Record<string, boolean>)[f.key]).length;
             return (
-              <div key={group} className="stack" style={{ gap: 10 }}>
-                <div className="stat-label">{group}</div>
-                <div className="grid grid-2">
-                  {inGroup.map((flagDef) => (
-                    <div
-                      key={flagDef.key}
-                      ref={flagDef.key === highlightFlag ? flagRef : undefined}
-                      className={flagDef.key === highlightFlag ? 'highlight-target' : undefined}
-                    >
-                      <Toggle
-                        checked={Boolean((draft.flags as unknown as Record<string, boolean>)[flagDef.key])}
-                        onChange={(v) => set('flags', { ...draft.flags, [flagDef.key]: v })}
-                        title={`${flagDef.label}${flagDef.recommended ? ' · recommended' : ''}${flagDef.danger ? ' · careful' : ''}`}
-                        help={`${flagDef.arg} — ${flagDef.help}`}
-                      />
-                    </div>
-                  ))}
+              <div key={group} className="flag-group">
+                <div className="flag-group-head">
+                  <span className="stat-label">{group}</span>
+                  <span className="flag-group-rule" />
+                  {onHere ? <span className="small faint">{onHere} on</span> : null}
+                </div>
+                <div className="flag-grid">
+                  {inGroup.map((flagDef) => {
+                    const on = Boolean((draft.flags as unknown as Record<string, boolean>)[flagDef.key]);
+                    return (
+                      <div
+                        key={flagDef.key}
+                        ref={flagDef.key === highlightFlag ? flagRef : undefined}
+                        className={`flag-card${on ? ' on' : ''}${flagDef.key === highlightFlag ? ' highlight-target' : ''}`}
+                      >
+                        <Toggle
+                          checked={on}
+                          onChange={(v) => set('flags', { ...draft.flags, [flagDef.key]: v })}
+                          title={
+                            <>
+                              {flagDef.label}
+                              {flagDef.recommended ? <Badge tone="ok">recommended</Badge> : null}
+                              {flagDef.danger ? <Badge tone="warn">careful</Badge> : null}
+                            </>
+                          }
+                          help={
+                            <>
+                              <span className="flag-arg">{flagDef.arg}</span>
+                              <span className="flag-help">{flagDef.help}</span>
+                            </>
+                          }
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
+
+          {settingHits.length ? (
+            <div className="stack" style={{ gap: 0, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+              <div className="small dim" style={{ marginBottom: 6 }}>
+                {settingHits.length === 1 ? 'This one is an INI setting' : `${settingHits.length} of these are INI settings`} rather
+                than a launch flag — ARK reads them out of a file, so they live on the Game settings tab.
+              </div>
+              {settingHits.slice(0, 8).map((def) => (
+                <div className="setting-row" key={idOf(def)}>
+                  <div className="setting-meta">
+                    <div className="setting-name">
+                      {def.label}
+                      <Badge>{def.group}</Badge>
+                      <span className="setting-key">
+                        {def.file === 'gus' ? 'GameUserSettings' : 'Game'}.ini · {def.key}
+                      </span>
+                    </div>
+                    {def.help ? <div className="setting-help">{def.help}</div> : null}
+                  </div>
+                  <div className="setting-control">
+                    <Button size="sm" onClick={onShowSettings}>
+                      Open Game settings
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {settingHits.length > 8 ? (
+                <div className="small faint" style={{ paddingTop: 10 }}>
+                  and {settingHits.length - 8} more on the Game settings tab.
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="divider" />
           <Field

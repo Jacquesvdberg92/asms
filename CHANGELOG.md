@@ -2,6 +2,44 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.7] — 2026-09-03
+
+"I don't see a tame rate" — because Taming speed sat under **Rates**, one line below Harvest
+health. Which raised the better question: what else is missing? Every candidate was checked against
+the installed server itself, both as ASCII and as UTF-16, and against the `[ServerSettings]` block
+the server writes into GameUserSettings.ini on its way down. Seventy-six settings came back.
+
+### Added
+- **A Taming tab.** Taming speed leads it, followed by the three that actually decide how a knockout
+  goes: passive tame interval, wild food drain and wild torpor drain
+- **Cryopods, all eight of them** — the nerf and its three numbers, cryo sickness on PvE, the fridge
+  requirement, the enemy check, and fridges on platform saddles
+- **A Transfers tab.** A cluster is only as good as what it lets through, and every one of these
+  was a trip to the raw INI before: the six upload and download blocks, the foreign-tame switch,
+  how long items, tames and survivors keep in the bank, and how many fit
+- **A Lost Colony tab** — bunkers, the cryo hospital, the bloodforge and outpost sigils. ARK writes
+  every one of these into GameUserSettings.ini itself, so the names and the defaults are its own
+- Another forty across the existing tabs: mating speed and the imprint rules, the auto PvE clock,
+  the PvP respawn penalty, tribe alliances and log depth, custom recipes, harvesting damage, fuel
+  burn, diseases, voice and proximity chat, the soft tame limit, the wild dino wipe interval, drop
+  behaviour, structure repair cooldown and the no-build volumes
+- **One search box, above the tabs, and it works from both sides.** Searching Game settings would
+  find a launch flag and offer the door to it; searching from Server & launch found nothing, because
+  that tab had no box at all. Now the same query filters the flags in place and lists the INI
+  settings it matched, each with a button through to them — and the query survives the trip
+
+### Changed
+- **Launch flags are cards rather than a wall.** Forty switches in one grid, each with a paragraph
+  of help running into the next one's title. Each now sits in its own box that lights up when it is
+  on, with the command-line argument on its own line and `recommended` and `careful` as badges
+  instead of words glued to the label. Group headers carry a rule and a count of what is on
+
+### Fixed
+- **The catalogue is checked for the mistake that costs an evening.** A setting filed under the
+  wrong file is written to the wrong INI, where ARK reads nothing, finds nothing and says nothing.
+  Four tests now hold the line: no setting twice, every group has a tab, every number default sits
+  inside its own slider, and nothing lands in a file its section does not belong to
+
 ## [0.3.6] — 2026-09-03
 
 The map list was written when ARK had eight Ascended maps. It has ten - and the dropdown was the

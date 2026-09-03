@@ -6,6 +6,7 @@ import { cronMatches, nextRun, validateCron } from '../core/scheduler.js';
 import { parsePlayers, parseArkIds, RCON_SILENT, assertMapSafe } from '../core/servers.js';
 import { RconClient } from '../lib/rcon.js';
 import { CREATURES, ITEMS, KITS, danglingSpawnRefs } from '../core/spawn.js';
+import { SETTINGS, SETTING_GROUPS } from '../core/catalog.js';
 import { worthAnotherRun } from '../lib/steamcmd.js';
 
 // ------------------------------------------------------------------- INI
@@ -309,6 +310,42 @@ test('players: the newest line wins when an id has been recorded more than once'
     'AdminCmd: b (PlayerName: New, ARKID: 222222222, PlatformID: aabbcc)',
   ].join('\n');
   assert.deepEqual(parseArkIds(text).aabbcc, { name: 'New', arkId: '222222222' });
+});
+
+// -------------------------------------------------------------- settings
+
+test('settings: no setting is defined twice', () => {
+  const seen = new Set<string>();
+  for (const def of SETTINGS) {
+    const id = `${def.file}:${def.section}:${def.key}`;
+    assert.ok(!seen.has(id), `${id} is in the catalogue twice`);
+    seen.add(id);
+  }
+});
+
+test('settings: every group has a tab to appear under', () => {
+  for (const def of SETTINGS) {
+    assert.ok(SETTING_GROUPS.includes(def.group), `${def.key} is in group "${def.group}", which is not on the tab strip`);
+  }
+});
+
+test('settings: a number setting has a number for a default, inside its own range', () => {
+  for (const def of SETTINGS) {
+    if (def.type !== 'float' && def.type !== 'int') continue;
+    const value = Number(def.default);
+    assert.ok(Number.isFinite(value), `${def.key} defaults to "${def.default}", which is not a number`);
+    if (def.min !== undefined) assert.ok(value >= def.min, `${def.key} defaults below its own minimum`);
+    if (def.max !== undefined) assert.ok(value <= def.max, `${def.key} defaults above its own maximum`);
+  }
+});
+
+test('settings: a Game.ini setting is filed under a Game.ini section', () => {
+  // Putting one in the wrong file is the failure that costs an evening: ARK
+  // reads the file it belongs in, finds nothing, and says nothing either.
+  for (const def of SETTINGS) {
+    if (def.file === 'game') assert.ok(def.section.startsWith('/script/'), `${def.key} is written to Game.ini under [${def.section}]`);
+    else assert.ok(!def.section.startsWith('/script/shootergame'), `${def.key} is written to GameUserSettings.ini under a Game.ini section`);
+  }
 });
 
 // ------------------------------------------------------------------- maps
