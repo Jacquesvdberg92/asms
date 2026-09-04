@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAction, useStore } from '../../lib/store';
 import { api } from '../../lib/api';
-import { Button, Empty, Field, Modal, CopyButton } from '../../components/ui';
+import { Button, Callout, Empty, Field, Modal, CopyButton } from '../../components/ui';
 import { Icon } from '../../components/Icons';
 import { Help } from '../../components/Tooltip';
 import { hueFor } from '../../lib/format';
@@ -12,6 +12,7 @@ export default function Players({ server, runtime }: { server: ServerInstance; r
   const [busy, run] = useAction();
   const [players, setPlayers] = useState<PlayerEntry[]>(runtime?.playerList ?? []);
   const [target, setTarget] = useState<PlayerEntry | null>(null);
+  const [admin, setAdmin] = useState<PlayerEntry | null>(null);
   const [manualId, setManualId] = useState('');
 
   useEffect(() => {
@@ -101,6 +102,9 @@ export default function Players({ server, runtime }: { server: ServerInstance; r
                     </td>
                     <td className="right">
                       <div className="btn-group" style={{ justifyContent: 'flex-end' }}>
+                        <Button size="sm" onClick={() => setAdmin(p)}>
+                          Admin
+                        </Button>
                         <Button size="sm" onClick={() => setTarget(p)}>
                           Message
                         </Button>
@@ -150,6 +154,7 @@ export default function Players({ server, runtime }: { server: ServerInstance; r
       </div>
 
       {target ? <MessageModal player={target} onClose={() => setTarget(null)} onSend={(msg) => act('message', target.id, msg)} /> : null}
+      {admin ? <AdminModal server={server} player={admin} onClose={() => setAdmin(null)} /> : null}
     </div>
   );
 }
@@ -174,6 +179,175 @@ function MessageModal({ player, onClose, onSend }: { player: PlayerEntry; onClos
       <Field label="Private message" help="Delivered in their chat window only.">
         <input className="input" autoFocus value={message} onChange={(e) => setMessage(e.target.value)} />
       </Field>
+    </Modal>
+  );
+}
+
+/**
+ * Ascended has no command that makes an account an admin, and it is worth
+ * saying why rather than shipping a button that quietly does nothing.
+ *
+ * Checked against the shipped ArkAscendedServer.exe, ASCII and UTF-16: the
+ * only AddAdmin/RemoveAdmin strings in it belong to ServerAddAdminPlayer on
+ * the console-hosted server's own UI, not to RCON. Evolved's
+ * AllowedCheaterSteamIDs.txt is gone too - the only id list files the binary
+ * knows are PlayersJoinNoCheckList.txt, PlayersExclusiveJoinList.txt and
+ * BanList.txt. Admin hangs entirely off ServerAdminPassword and the player
+ * typing enablecheats into their own console.
+ *
+ * So this offers the two things that do work, and is clear about the
+ * difference: hand over the password for real admin, or grant creative mode
+ * over RCON for most of the powers and none of the keys.
+ */
+function AdminModal({ server, player, onClose }: { server: ServerInstance; player: PlayerEntry; onClose: () => void }) {
+  const { toast } = useStore();
+  const [busy, run] = useAction();
+  const [arkId, setArkId] = useState<string | null>(null);
+  const [looked, setLooked] = useState(false);
+  const [manual, setManual] = useState('');
+
+  // Creative mode is aimed with the numeric Player ID, the same id the Spawn
+  // tab needs and the same place it comes from: the server's own log.
+  useEffect(() => {
+    let live = true;
+    api
+      .post<{ ue4Id: string | null }>(`/servers/${server.id}/players/resolve`, { platformId: player.id })
+      .then((res) => live && (setArkId(res.ue4Id), setLooked(true)))
+      .catch(() => live && setLooked(true));
+    return () => {
+      live = false;
+    };
+  }, [server.id, player.id]);
+
+  const line = `enablecheats ${server.adminPassword}`;
+
+  const sendPassword = () =>
+    void run(
+      () =>
+        api.post<{ response: string }>(`/servers/${server.id}/players/action`, {
+          action: 'message',
+          playerId: player.id,
+          message: line,
+        }),
+      `Sent to ${player.name}`,
+    );
+
+  const grantCreative = (id: string) =>
+    void run(
+      () =>
+        api.post<{ response: string }>(`/servers/${server.id}/players/action`, { action: 'creative', playerId: id }),
+      `Creative mode toggled for ${player.name}`,
+    );
+
+  const applyTyped = () => {
+    const id = manual.trim();
+    if (!/^\d{6,12}$/.test(id)) {
+      toast(
+        'warn',
+        'That is not the id this command takes',
+        `GiveCreativeModeToPlayer wants the numeric Player ID - nine or ten digits, like 194756294. "${id}" is not that. The long id with letters in it is the EOS one off the player list, and this command will not take it.`,
+      );
+      return;
+    }
+    setArkId(id);
+    grantCreative(id);
+  };
+
+  return (
+    <Modal
+      title={`Admin for ${player.name}`}
+      wide
+      onClose={onClose}
+      footer={
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <div className="stack">
+        <Callout tone="info" title="Ascended has no command that promotes an account">
+          <p>
+            Admin is one shared password, not a list of people. A player becomes an admin by typing{' '}
+            <span className="mono">enablecheats</span> into their own console, and stays one until they disconnect.
+            There is no RCON command for it and no file of admin ids on the server, so the two ways below are the
+            whole of it.
+          </p>
+        </Callout>
+
+        <div className="stack" style={{ gap: 8 }}>
+          <span className="stat-label">Full admin — give them the password</span>
+          <span className="tiny faint">
+            Everything: spawning, destroying, flying, other people's tribes, and the same password RCON logs in with.
+            Only hand it to someone you would trust with this whole server.
+          </span>
+          <div className="row row-wrap" style={{ gap: 6 }}>
+            <span className="mono small" style={{ userSelect: 'all' }}>
+              {line}
+            </span>
+            <CopyButton text={line} label="Copy the line" />
+            <Button size="sm" busy={busy} onClick={sendPassword}>
+              Send it to them in game
+            </Button>
+          </div>
+          <span className="tiny faint">
+            Sending it puts the password in their chat window, where anything reading chat — the game log,{' '}
+            <span className="mono">GetChat</span> over RCON, a Discord bridge, their own stream — sees it too. Taking it
+            back later means changing the password in Settings → Server &amp; launch and restarting, which locks out
+            every other admin at the same time.
+          </span>
+        </div>
+
+        <div className="divider" />
+
+        <div className="stack" style={{ gap: 8 }}>
+          <span className="stat-label">Creative mode — the powers without the password</span>
+          <span className="tiny faint">
+            Flight, no clip, infinite resources and an unlimited inventory for this one player.{' '}
+            <span className="mono">GiveCreativeModeToPlayer</span> is a toggle: run it again to take it back. They stay
+            an ordinary player otherwise — no console, no commands of their own.
+          </span>
+          {arkId ? (
+            <div className="row row-wrap" style={{ gap: 6 }}>
+              <Button variant="primary" busy={busy} onClick={() => grantCreative(arkId)}>
+                Toggle creative mode
+              </Button>
+              <span className="tiny faint mono">Player ID {arkId}</span>
+            </div>
+          ) : looked ? (
+            <>
+              <Callout tone="warn" title={`ASMS has not seen ${player.name}'s Player ID yet`}>
+                <p>
+                  This command is aimed with the numeric Player ID, not the EOS id on the player list, and Ascended has
+                  no command that converts one to the other. ASMS reads the number out of the server's own log, which
+                  writes both ids on one line — but only when somebody runs an admin command in game, and{' '}
+                  {player.name} has not.
+                </p>
+                <p>
+                  Have them run <span className="mono">cheat showadminmanager</span> once and ASMS will find it by
+                  itself from then on, or read the <b>Player ID</b> off that same Admin Manager and paste it here.
+                </p>
+              </Callout>
+              <div className="row row-wrap" style={{ gap: 6 }}>
+                <div className="input-group" style={{ maxWidth: 280 }}>
+                  <input
+                    className="input input-mono"
+                    value={manual}
+                    aria-label="Player ID"
+                    placeholder={`${player.name}'s Player ID`}
+                    onChange={(e) => setManual(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && applyTyped()}
+                  />
+                </div>
+                <Button busy={busy} disabled={!manual.trim()} onClick={applyTyped}>
+                  Toggle creative mode
+                </Button>
+              </div>
+            </>
+          ) : (
+            <span className="tiny faint">Looking up their Player ID…</span>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 }

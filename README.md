@@ -154,6 +154,10 @@ to them the next time it starts.
 - Console streaming the server's own stdout, SteamCMD output and RCON replies in one place
 - RCON prompt with tab completion, command help and history
 - Player list with kick, ban, whitelist and private messages
+- **Admin, honestly.** Ascended has no command that promotes an account, so the Admin button on a
+  player offers the two things that do work: the `enablecheats` line to hand over — copied, or sent
+  straight into their chat — and creative mode, which ASMS grants over RCON without giving away the
+  password
 - Log viewer that tails ARK's log **and ASMS' own log**, with line numbers, severity colouring,
   per-level counts, search highlighting, follow mode, rotation handling and a download button
 - Live charts of players over time, per-server sparklines, CPU and memory

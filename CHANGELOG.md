@@ -2,13 +2,28 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
-## [0.3.8] — 2026-09-03
+## [0.3.8] — 2026-09-04
 
-The backup page had one button and it exported everything — including every password on the
-machine. Which made it the wrong thing to reach for when all someone wants is to say "here is what
-I'm running".
+Two questions with the same shape: "how do I make my mate an admin?" and "how do I send someone my
+mod list?" Both had an answer that handed over far more than was asked — the whole admin password,
+or a backup file with every password on the machine inside it. Both now have a narrower one.
 
 ### Added
+- **An Admin button on every player, and the truth about what it can do.** Ascended has no command
+  that makes an account an admin — checked against the shipped server binary, which has no
+  `AddAdmin` reachable over RCON and none of Evolved's `AllowedCheaterSteamIDs.txt`. Admin is one
+  shared password and a player typing `enablecheats` themselves. So the button says that, and
+  offers the two things that do work
+- **Hand over the password, without dictating it.** The exact `enablecheats <password>` line, ready
+  to copy — or sent privately into that player's chat window in one press. Beside it, what it
+  actually costs: the same password RCON uses, visible to anything that reads chat, and revocable
+  only by changing it and restarting, which locks out every other admin at once
+- **Creative mode, for the powers without the keys.** `GiveCreativeModeToPlayer` grants flight, no
+  clip and an unlimited inventory to one player over RCON and nothing else — no console, no
+  commands of their own. It is a toggle, so the same button takes it back. Aiming it needs the
+  numeric Player ID, which ASMS reads out of the server's own log the way the Spawn tab does, and
+  asks for only when the log has never seen them
+- The three creative-mode commands are in the RCON prompt's completion and help as well
 - **Just the mod list, as its own export.** A card on Backup & migrate that writes out the mods and
   nothing else — no passwords, no ports, no install paths — so the file is safe to send to a
   co-admin, paste in Discord, or keep beside your notes. Pick every server and the library at once,

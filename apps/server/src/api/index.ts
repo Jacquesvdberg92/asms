@@ -607,6 +607,12 @@ export function createApi(): Router {
           return { response: await servers.rconExec(req.params.id, `AllowPlayerToJoinNoCheck ${target}`) };
         case 'unwhitelist':
           return { response: await servers.rconExec(req.params.id, `DisallowPlayerToJoinNoCheck ${target}`) };
+        // The only one here aimed with the numeric Player ID rather than the
+        // EOS id ListPlayers reports: GiveCreativeModeToPlayer takes what the
+        // in-game Admin Manager calls the Player ID, same as GiveItemToPlayer.
+        // It toggles, so the same call takes creative mode away again.
+        case 'creative':
+          return { response: await servers.rconExec(req.params.id, `GiveCreativeModeToPlayer ${target}`) };
         case 'message':
           return { response: await servers.rconExec(req.params.id, `ServerChatTo "${target}" ${message ?? ''}`) };
         default:
