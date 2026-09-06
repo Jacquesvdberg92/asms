@@ -682,6 +682,18 @@ export const SETTINGS: SettingDef[] = [
     min: 0,
     max: 1000,
   },
+  {
+    key: 'MaxTributeCharacters',
+    file: 'gus',
+    section: SS,
+    type: 'int',
+    default: '10',
+    label: 'Survivor slots in the bank',
+    group: 'Transfers',
+    help: 'How many uploaded survivors the bank holds at once. At zero nobody can transfer out at all.',
+    min: 0,
+    max: 1000,
+  },
 
   // -------------------------------------------------------- more tribes
   flag('bPvEAllowTribeWarCancel', 'Allow calling a tribe war off', 'Tribes', 'False', undefined, 'game', GM),

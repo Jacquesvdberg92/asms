@@ -191,6 +191,10 @@ to them the next time it starts.
 - **Random cluster IDs** on a button, wherever an ID is typed. ARK matches clusters on this string
   and nothing else, so `1` is the same `1` a hundred other people used — ASMS warns about short,
   obvious IDs and rolls you one nobody else has
+- **Transfers set up for you.** Putting a server in a cluster writes the transfer rules ARK leaves
+  out of the file — both directions open, generous bank slots, and a thirty-day expiry rather than
+  ARK's one day, which is what quietly deletes an uploaded survivor overnight. Only keys your INI
+  does not already have, so anything you set yourself stays exactly as you set it
 
 **Backup & migrate**
 - **Export everything** to one file: every server with its ports, passwords, mods, launch flags and

@@ -22,7 +22,7 @@ import {
 } from '../lib/proc.js';
 import { getClient, dropClient, once } from '../lib/rcon.js';
 import { installOrUpdate, installedBuildId, latestBuildId } from '../lib/steamcmd.js';
-import { syncIdentity, readDoc } from './config.js';
+import { syncIdentity, syncClusterTransfers, readDoc } from './config.js';
 import { getValue } from '../lib/ini.js';
 import * as metrics from './metrics.js';
 import { LAUNCH_FLAGS } from './catalog.js';
@@ -1329,6 +1329,12 @@ async function launch(id: string, server: ServerInstance): Promise<void> {
   }
 
   syncIdentity(server);
+  // A cluster ARK will not carry gear through looks exactly like one that
+  // works, right up until somebody transfers. Say what was filled in.
+  const filled = syncClusterTransfers(server);
+  if (filled.length) {
+    pushConsole(id, `Cluster transfers: wrote ${filled.length} missing setting(s) into GameUserSettings.ini - ${filled.join(', ')}.`, 'sys');
+  }
   const plan = buildLaunchPlan(server);
   pushConsole(id, `--- Launching ---`, 'sys');
   pushConsole(id, plan.display, 'sys');

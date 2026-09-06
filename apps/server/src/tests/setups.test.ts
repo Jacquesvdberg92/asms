@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PRESETS, getPreset, resolve, resolveById } from '../core/presets.js';
 import { SETTINGS } from '../core/catalog.js';
-import { readCurated, writeCurated, settingId, readRaw, writeRaw, syncIdentity } from '../core/config.js';
+import { readCurated, writeCurated, settingId, readRaw, writeRaw, syncIdentity, syncClusterTransfers } from '../core/config.js';
 import { scrubIni, validateBundle } from '../core/setups.js';
 import { READY_LINE, assertLaunchSafe, assertInstallPathSafe, buildLaunchPlan, defaultFlags, normaliseMods, installedMods, isModTrouble, modFailureMessage, rejectedModIds, reportMods } from '../core/servers.js';
 import { INSTALL_PATH_LIMIT } from '../lib/paths.js';
@@ -569,4 +569,82 @@ test('mods: the PC-only switch reaches the command line', () => {
   assert.ok(!buildLaunchPlan(server).args.includes('-ServerPlatform=PC'));
   const pcOnly = { ...server, flags: { ...server.flags, pcOnlyServer: true } } as ServerInstance;
   assert.ok(buildLaunchPlan(pcOnly).args.includes('-ServerPlatform=PC'));
+});
+
+// --------------------------------------------------- cluster transfers
+
+/** A server with everything the transfer path cares about and nothing else. */
+function clusterServer(clusterId: string): ServerInstance {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asms-cluster-'));
+  return {
+    ...({} as ServerInstance),
+    name: 'T', map: 'TheIsland_WP', installPath: dir, sessionName: 'T', serverPassword: '',
+    adminPassword: '1234', spectatorPassword: '', motd: '', multihome: '', port: 7777,
+    queryPort: 27015, rconPort: 27020, rconEnabled: true, maxPlayers: 70, clusterId,
+    clusterDir: '', mods: [], flags: defaultFlags(), extraArgs: '', extraQuery: '',
+  } as ServerInstance;
+}
+
+test('servers: a clustered server is given the transfer rules ARK leaves unwritten', () => {
+  const server = clusterServer('ark-q8rpks7desvz');
+  const filled = syncClusterTransfers(server);
+
+  assert.ok(filled.includes('TributeCharacterExpirationSeconds'), 'the survivor timer is the one that loses characters');
+  const ini = readRaw(server, 'gus');
+
+  // A day is long enough to lose a survivor to a night's sleep.
+  assert.match(ini, /TributeCharacterExpirationSeconds=2592000/);
+  assert.match(ini, /TributeItemExpirationSeconds=2592000/);
+  assert.match(ini, /TributeDinoExpirationSeconds=2592000/);
+
+  // Both directions, or the gear goes up and never comes down.
+  assert.match(ini, /PreventUploadItems=False/);
+  assert.match(ini, /PreventDownloadItems=False/);
+  assert.match(ini, /PreventUploadSurvivors=False/);
+  assert.match(ini, /PreventDownloadSurvivors=False/);
+  assert.match(ini, /NoTributeDownloads=False/);
+
+  // Anything past the bank limit is dropped rather than queued.
+  assert.match(ini, /MaxTributeItems=500/);
+  assert.match(ini, /MaxTributeCharacters=50/);
+});
+
+test('servers: a standalone server is not quietly put in transfer mode', () => {
+  const server = clusterServer('');
+  assert.deepEqual(syncClusterTransfers(server), []);
+  assert.doesNotMatch(readRaw(server, 'gus'), /TributeCharacterExpirationSeconds/);
+});
+
+test('servers: a transfer rule the admin set themselves survives the next launch', () => {
+  const server = clusterServer('ark-q8rpks7desvz');
+  writeRaw(server, 'gus', '[ServerSettings]\r\nPreventDownloadDinos=True\r\nMaxTributeItems=12\r\n');
+
+  const filled = syncClusterTransfers(server);
+  const ini = readRaw(server, 'gus');
+
+  // Blocking tames on a PvE map is a decision, not an omission.
+  assert.match(ini, /PreventDownloadDinos=True/);
+  assert.match(ini, /MaxTributeItems=12/);
+  assert.ok(!filled.includes('PreventDownloadDinos'));
+  assert.ok(!filled.includes('MaxTributeItems'));
+
+  // The rest is still filled in around it.
+  assert.match(ini, /TributeCharacterExpirationSeconds=2592000/);
+});
+
+test('servers: filling in the transfer rules twice changes nothing the second time', () => {
+  const server = clusterServer('ark-q8rpks7desvz');
+  assert.ok(syncClusterTransfers(server).length > 0);
+  assert.deepEqual(syncClusterTransfers(server), [], 'a second launch has nothing left to write');
+});
+
+test('settings: every transfer rule ASMS writes has a control in the catalogue', () => {
+  // Otherwise ASMS sets a value the settings page cannot show or undo.
+  const written = ['NoTributeDownloads', 'PreventDownloadSurvivors', 'PreventDownloadItems',
+    'PreventDownloadDinos', 'PreventUploadSurvivors', 'PreventUploadItems', 'PreventUploadDinos',
+    'TributeItemExpirationSeconds', 'TributeDinoExpirationSeconds', 'TributeCharacterExpirationSeconds',
+    'MaxTributeItems', 'MaxTributeDinos', 'MaxTributeCharacters'];
+  for (const key of written) {
+    assert.ok(SETTINGS.some((d) => d.key === key), `${key} is written at launch but has no control`);
+  }
 });

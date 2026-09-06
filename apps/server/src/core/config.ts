@@ -89,6 +89,61 @@ export function settingId(def: SettingDef): string {
 }
 
 /**
+ * What every server in a cluster has to agree on before anybody dares carry
+ * gear through it.
+ *
+ * ARK's defaults here are written for official servers, not for four friends
+ * and a spare PC: an upload nobody collects within a day is deleted, and the
+ * bank holds ten survivors. None of that is in the file to read - leave the
+ * keys out and ARK still applies them - so the first time you meet the rules
+ * is the time a character and everything on it is gone.
+ *
+ * So ASMS writes them down for any server actually in a cluster. Only the
+ * keys the file does not already have: an admin who deliberately blocked tame
+ * downloads on a PvE map keeps that, because that value is there to see.
+ */
+const CLUSTER_TRANSFERS: Array<[key: string, value: string]> = [
+  // A private cluster has no use for a one-sided door.
+  ['NoTributeDownloads', 'False'],
+  ['PreventDownloadSurvivors', 'False'],
+  ['PreventDownloadItems', 'False'],
+  ['PreventDownloadDinos', 'False'],
+  ['PreventUploadSurvivors', 'False'],
+  ['PreventUploadItems', 'False'],
+  ['PreventUploadDinos', 'False'],
+
+  // Thirty days instead of ARK's one, so logging off halfway through a move is
+  // not a countdown to losing the survivor at the other end.
+  ['TributeItemExpirationSeconds', '2592000'],
+  ['TributeDinoExpirationSeconds', '2592000'],
+  ['TributeCharacterExpirationSeconds', '2592000'],
+
+  // A geared survivor carries more than fifty stacks, and everything over the
+  // limit is dropped on the way out rather than queued behind it.
+  ['MaxTributeItems', '500'],
+  ['MaxTributeDinos', '100'],
+  ['MaxTributeCharacters', '50'],
+];
+
+/**
+ * Fill in the transfer settings a clustered server needs, without overwriting
+ * anything the admin has already said out loud. Returns the keys it added, so
+ * the launch console can show its work rather than changing the file quietly.
+ */
+export function syncClusterTransfers(server: ServerInstance): string[] {
+  if (!server.clusterId.trim()) return [];
+  const doc = readDoc(server, 'gus');
+  const filled: string[] = [];
+  for (const [key, value] of CLUSTER_TRANSFERS) {
+    if (getValue(doc, 'ServerSettings', key) !== undefined) continue;
+    setValue(doc, 'ServerSettings', key, value);
+    filled.push(key);
+  }
+  if (filled.length) writeDoc(server, 'gus', doc);
+  return filled;
+}
+
+/**
  * Push the identity fields ASMS owns (names, passwords, ports, MOTD) into
  * GameUserSettings.ini. Called right before every launch so the INI never
  * drifts from what the dashboard shows.
