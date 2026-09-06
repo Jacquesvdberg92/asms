@@ -32,11 +32,22 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  /**
+   * fetch only rejects when the request never got an answer at all - ASMS
+   * itself has stopped, is restarting, or is not reachable from here. The
+   * browser's own words for that are "Failed to fetch", which has sent more
+   * than one person hunting through their ARK settings for the fault.
+   */
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError('ASMS itself did not answer - it has stopped, is restarting, or cannot be reached from this device. Check the ASMS window, then reload this page.', 0);
+  }
 
   if (res.status === 401) {
     setToken(null);

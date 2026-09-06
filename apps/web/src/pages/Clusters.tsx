@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useStore, useAction } from '../lib/store';
 import { api } from '../lib/api';
 import { TopBar } from '../components/Shell';
-import { Button, Empty, Field, Modal, StateBadge, Badge } from '../components/ui';
+import { Button, Confirm, Empty, Field, Modal, StateBadge, Badge } from '../components/ui';
 import { Icon } from '../components/Icons';
 import { ClusterIdInput } from '../components/ClusterIdInput';
 import { hueFor } from '../lib/format';
@@ -12,6 +12,7 @@ export default function Clusters() {
   const { servers, runtimes, settings } = useStore();
   const [busy, run] = useAction();
   const [assigning, setAssigning] = useState(false);
+  const [leaving, setLeaving] = useState<{ ids: string[]; label: string } | null>(null);
 
   const clusters = useMemo(() => {
     const map = new Map<string, typeof servers>();
@@ -24,10 +25,43 @@ export default function Clusters() {
 
   const standalone = servers.filter((s) => !s.clusterId.trim());
 
+  /**
+   * Every failure here used to be swallowed and the toast still said the
+   * command was sent, so a cluster that ignored "Stop all" looked exactly like
+   * one that obeyed. Name what refused instead.
+   */
   const bulk = (ids: string[], action: 'start' | 'stop' | 'restart') =>
     void run(async () => {
-      for (const id of ids) await api.post(`/servers/${id}/${action}`).catch(() => {});
+      const failed: string[] = [];
+      for (const id of ids) {
+        try {
+          await api.post(`/servers/${id}/${action}`);
+        } catch (err) {
+          const name = servers.find((s) => s.id === id)?.name ?? id;
+          failed.push(`${name} - ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (!failed.length) return;
+      throw new Error(
+        failed.length === ids.length
+          ? failed.join('; ')
+          : `${ids.length - failed.length} of ${ids.length} took it. ${failed.join('; ')}`,
+      );
     }, `${action} sent to ${ids.length} server${ids.length === 1 ? '' : 's'}`);
+
+  /**
+   * Joining a cluster was a button; leaving it meant knowing the ID lived on
+   * each server's own settings page and clearing it there by hand.
+   */
+  const leave = (ids: string[]) =>
+    void run(
+      async () => {
+        for (const id of ids) await api.patch(`/servers/${id}`, { clusterId: '', clusterDir: '' });
+      },
+      ids.length > 1
+        ? 'Cluster disbanded - restart those servers to apply'
+        : 'Taken out of the cluster - restart that server to apply',
+    );
 
   return (
     <>
@@ -77,6 +111,15 @@ export default function Clusters() {
                     <Button size="sm" variant="danger" busy={busy} onClick={() => bulk(members.map((m) => m.id), 'stop')}>
                       <Icon.Stop size={13} /> Stop all
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      busy={busy}
+                      title="Take every server out of this cluster"
+                      onClick={() => setLeaving({ ids: members.map((m) => m.id), label: id })}
+                    >
+                      <Icon.Cluster size={13} /> Disband
+                    </Button>
                   </div>
                 </div>
                 <div className="table-wrap">
@@ -88,6 +131,7 @@ export default function Clusters() {
                         <th>Port</th>
                         <th>Players</th>
                         <th>State</th>
+                        <th />
                       </tr>
                     </thead>
                     <tbody>
@@ -105,6 +149,17 @@ export default function Clusters() {
                           </td>
                           <td>
                             <StateBadge state={runtimes[member.id]?.state ?? 'stopped'} />
+                          </td>
+                          <td>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              busy={busy}
+                              title={`Take ${member.name} out of this cluster`}
+                              onClick={() => setLeaving({ ids: [member.id], label: member.name })}
+                            >
+                              Remove
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -140,6 +195,29 @@ export default function Clusters() {
       </div>
 
       {assigning ? <AssignModal onClose={() => setAssigning(false)} /> : null}
+      {leaving ? (
+        <Confirm
+          title={leaving.ids.length > 1 ? 'Disband this cluster?' : `Take ${leaving.label} out of the cluster?`}
+          danger
+          confirmLabel={leaving.ids.length > 1 ? 'Disband' : 'Remove'}
+          body={
+            <>
+              <p>
+                {leaving.ids.length > 1
+                  ? 'Every server here goes back to standalone. '
+                  : `${leaving.label} goes back to standalone. `}
+                The transfer bank on disk is left where it is, but anything sitting in it has nowhere to come
+                back to until the cluster ID goes on again.
+              </p>
+              <p className="small faint">
+                Takes effect on the next restart of {leaving.ids.length > 1 ? 'those servers' : 'that server'}.
+              </p>
+            </>
+          }
+          onConfirm={() => leave(leaving.ids)}
+          onClose={() => setLeaving(null)}
+        />
+      ) : null}
     </>
   );
 }
