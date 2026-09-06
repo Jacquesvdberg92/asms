@@ -278,11 +278,88 @@ export async function installOrUpdate(opts: UpdateOptions): Promise<void> {
 
   if (!reportedSuccess(output)) {
     const err = /Error!\s*(.+)/i.exec(output)?.[1]?.trim();
-    throw new Error(err || `SteamCMD exited with code ${code} without reporting success`);
+    throw new Error(explainUpdateFailure(opts.installPath, err || `SteamCMD exited with code ${code} without reporting success`));
   }
   if (!fs.existsSync(ark.exe(opts.installPath))) {
     throw new Error('SteamCMD reported success but ArkAscendedServer.exe is missing - try a validate run');
   }
+}
+
+/** SteamCMD writes the reason an update gave up here, next to its own binary. */
+export function contentLogPath(): string {
+  return path.join(path.dirname(steamCmdPath()), 'logs', 'content_log.txt');
+}
+
+/** The tail is enough: only the run that just failed matters. */
+function readContentLogTail(bytes = 64 * 1024): string {
+  try {
+    const file = contentLogPath();
+    const { size } = fs.statSync(file);
+    const start = Math.max(0, size - bytes);
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return ''; // No log is not evidence of anything.
+  }
+}
+
+/**
+ * What SteamCMD meant, rather than what it said.
+ *
+ * All the console ever gets is `App '2430930' state is 0x6 after update job`,
+ * and 0x6 only decodes to "installed, and still needs updating" - the state it
+ * gave up in, never the reason it gave up. The reason goes to content_log.txt
+ * beside the SteamCMD binary, which is not a file anybody knows to go and read.
+ */
+const UPDATE_FAILURES: Array<{ test: RegExp; explain: (installPath: string) => string }> = [
+  {
+    // Steam stops issuing manifest codes for a build once it is not the public
+    // one, so there is nothing to compute the patch against.
+    test: /Failed to get manifest request code[^\n]*Access Denied/i,
+    explain: (installPath) =>
+      `Steam would not hand over the manifest for the build already on disk, which is what it does once that build stops being the public one - so there is nothing for the update to patch forward from. Verify integrity on the Overview tab checks against the current build instead and usually clears this. If it comes back, delete ${ark.appManifest(installPath)} and update again - that costs a full download, so try the verify first.`,
+  },
+  {
+    test: /(Not enough disk space|Disk (?:write )?(?:failure|full))/i,
+    explain: (installPath) => `SteamCMD ran out of room while writing to ${installPath}. Free some space on that drive, or point the install folder at a bigger one.`,
+  },
+  {
+    test: /(Missing file privileges|Access is denied writing|Failed to (?:write|open) file)/i,
+    explain: (installPath) =>
+      `SteamCMD could not write into ${installPath}. Something is holding the files open - a server that is still running, a virus scanner, or a folder this account cannot write to.`,
+  },
+  {
+    test: /No subscription/i,
+    explain: () => 'Steam says the anonymous account cannot download the ASA server files right now. That is Steam’s side and usually temporary - try again in a few minutes.',
+  },
+];
+
+/**
+ * Add the reason to SteamCMD's own summary, when the content log knows one.
+ * The log is a parameter so this can be tested against a real one.
+ */
+export function explainUpdateFailure(installPath: string, raw: string, contentLog?: string): string {
+  const log = contentLog ?? readContentLogTail();
+  // This run only: everything since SteamCMD last announced itself.
+  const marker = log.lastIndexOf('Client version:');
+  const run = marker === -1 ? log : log.slice(marker);
+  if (!run) return raw;
+
+  for (const failure of UPDATE_FAILURES) {
+    if (failure.test.test(run)) return `${raw} - ${failure.explain(installPath)}`;
+  }
+
+  // Nothing recognised, so hand over the line SteamCMD gave up on and say
+  // where the rest of it is rather than pretending 0x6 was an explanation.
+  const cancelled = /update canceled\s*:\s*(.+)/i.exec(run)?.[1]?.trim();
+  const where = `The whole story is in ${contentLogPath()}.`;
+  return cancelled ? `${raw} - SteamCMD gave up with "${cancelled}". ${where}` : `${raw} - ${where}`;
 }
 
 /** buildid recorded in the local appmanifest, or null if not installed. */
