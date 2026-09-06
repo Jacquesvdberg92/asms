@@ -12,6 +12,11 @@ Notable changes to ASMS. Dates are the day the change landed.
   amount of emptying the box would shift it. On a machine with a VPN or a VirtualBox adapter that
   is a server which starts perfectly, shows as running, and times out for every player trying to
   join. It is now removed when the box is empty
+- **Joining and leaving a cluster is the same two clicks everywhere.** The new-server wizard offered
+  your existing clusters as buttons, with a Standalone one to opt out; a server's own settings page
+  had a bare text box you had to retype an ID into, and no hint that emptying it was how you left.
+  It is the same picker in both places now — every cluster you have, how many servers are already
+  in it, Standalone, and New cluster
 
 ## [0.3.9] — 2026-09-06
 

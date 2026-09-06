@@ -5,7 +5,7 @@ import { api } from '../../lib/api';
 import { Button, Field, Toggle, Badge, Callout, SearchInput } from '../../components/ui';
 import { Icon } from '../../components/Icons';
 import { Help } from '../../components/Tooltip';
-import { ClusterIdInput } from '../../components/ClusterIdInput';
+import { ClusterPicker } from '../../components/ClusterPicker';
 import { MapPicker } from '../../components/MapPicker';
 import { checkInstallPath } from '../../lib/paths';
 import { mapCodeError } from '../../lib/maps';
@@ -506,9 +506,15 @@ function ServerSettings({
           >
             <input className="input input-mono" value={draft.installPath} onChange={(e) => set('installPath', e.target.value)} />
           </Field>
-          <Field label="Cluster ID" help="Same ID on several servers enables transfers between them.">
-            <ClusterIdInput value={draft.clusterId} onChange={(id) => set('clusterId', id)} />
-          </Field>
+          <div className="grid-span">
+            <ClusterPicker
+              value={draft.clusterId}
+              onChange={(id) => set('clusterId', id)}
+              selfId={server.id}
+              label="Cluster"
+              help="Servers sharing a cluster ID share an upload/download bank. Standalone takes this one back out again."
+            />
+          </div>
           <Field label="Cluster folder" help="Leave blank to use the default under your cluster root.">
             <input className="input input-mono" value={draft.clusterDir} onChange={(e) => set('clusterDir', e.target.value)} />
           </Field>

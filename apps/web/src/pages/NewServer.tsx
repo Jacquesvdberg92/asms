@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, useAction } from '../lib/store';
 import { api } from '../lib/api';
@@ -10,9 +10,9 @@ import { sortSetups, summarise } from '../lib/setups';
 import { modLabel, modSearchLink, parseModList } from '../lib/mods';
 import { ModSources } from '../components/ModSources';
 import { LibraryPicker } from '../components/LibraryPicker';
-import { ClusterIdInput } from '../components/ClusterIdInput';
+import { ClusterPicker } from '../components/ClusterPicker';
 import { MapPicker } from '../components/MapPicker';
-import { randomClusterId } from '../lib/cluster';
+
 import { checkInstallPath } from '../lib/paths';
 import { mapCodeError } from '../lib/maps';
 import type { ModEntry, ServerInstance } from '../lib/types';
@@ -349,7 +349,7 @@ export default function NewServer() {
                   <input className="input" value={draft.motd} placeholder={`Welcome to ${draft.name || 'the server'}!`} onChange={(e) => set('motd', e.target.value)} />
                 </Field>
                 <div className="divider" />
-                <ClusterStep value={draft.clusterId} onChange={(id) => set('clusterId', id)} />
+                <ClusterPicker value={draft.clusterId} onChange={(id) => set('clusterId', id)} />
                 <div className="divider" />
                 <ModStep value={draft.mods} onChange={(mods) => set('mods', mods)} />
               </>
@@ -424,77 +424,6 @@ export default function NewServer() {
         </div>
       </div>
     </>
-  );
-}
-
-// --------------------------------------------------------------- cluster
-
-/**
- * "Connect to other servers" in the language people actually use. A cluster is
- * just a shared string, and getting it subtly wrong is the classic way to end
- * up with two clusters that look like one - so the ones you already have are
- * offered as buttons, and typing is the fallback rather than the default.
- */
-function ClusterStep({ value, onChange }: { value: string; onChange: (id: string) => void }) {
-  const { servers, library } = useStore();
-  const [typing, setTyping] = useState(false);
-
-  const known = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const server of servers) {
-      const id = server.clusterId.trim();
-      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    for (const cluster of library.clusters) if (!counts.has(cluster.id)) counts.set(cluster.id, 0);
-    return [...counts.entries()]
-      .map(([id, members]) => ({ id, members, name: library.clusters.find((c) => c.id === id)?.name ?? '' }))
-      .sort((a, b) => b.members - a.members || a.id.localeCompare(b.id));
-  }, [servers, library.clusters]);
-
-  const joined = known.find((c) => c.id === value);
-
-  return (
-    <Field
-      label="Connect to your other servers?"
-      help="Servers sharing a cluster ID share an upload/download bank — walk into an obelisk on one map and pop out on another."
-    >
-      {known.length ? (
-        <div className="row row-wrap" style={{ gap: 6, marginBottom: 8 }}>
-          <button className={`btn btn-sm ${!value ? 'btn-primary' : ''}`} onClick={() => { onChange(''); setTyping(false); }}>
-            Standalone
-          </button>
-          {known.map((cluster) => (
-            <button
-              key={cluster.id}
-              className={`btn btn-sm ${value === cluster.id ? 'btn-primary' : ''}`}
-              title={cluster.name || undefined}
-              onClick={() => { onChange(cluster.id); setTyping(false); }}
-            >
-              <span className="mono">{cluster.id}</span>
-              <span className="tiny faint" style={{ marginLeft: 6 }}>
-                {cluster.members ? `${cluster.members} server${cluster.members === 1 ? '' : 's'}` : 'unused'}
-              </span>
-            </button>
-          ))}
-          <button
-            className={`btn btn-sm ${typing ? 'btn-primary' : ''}`}
-            onClick={() => { setTyping(true); onChange(randomClusterId()); }}
-          >
-            <Icon.Plus size={13} /> New cluster
-          </button>
-        </div>
-      ) : null}
-
-      {typing || !known.length ? <ClusterIdInput value={value} onChange={onChange} autoFocus={typing} /> : null}
-
-      <span className="tiny faint">
-        {joined && joined.members
-          ? `Joins ${joined.members} server${joined.members === 1 ? '' : 's'} already in ${joined.id}. They all need to be restarted before transfers work.`
-          : value
-            ? `New cluster ${value} — give the same ID to another server to link them.`
-            : 'Standalone: nothing transfers in or out. You can join a cluster later from the Clusters page.'}
-      </span>
-    </Field>
   );
 }
 
