@@ -68,17 +68,59 @@ export function totalBytes(entries: ZipEntry[]): number {
  */
 export async function writeZip(entries: ZipEntry[], destFile: string): Promise<void> {
   const zip = new yazl.ZipFile();
+
+  /**
+   * yazl reports a bad entry by emitting 'error' on the ZipFile itself, and an
+   * 'error' event with no listener is an uncaught exception - which in ASMS
+   * means the whole manager exits, mid-backup, taking the dashboard with it.
+   * A backup that cannot be written is a failed backup. It is not a reason to
+   * take the process down.
+   */
+  let fail: (err: Error) => void = () => {};
+  const failed = new Promise<never>((_resolve, reject) => {
+    fail = reject;
+  });
+  zip.on('error', (err: Error) => fail(err));
+
   for (const entry of entries) {
-    // A file that disappears mid-backup (ARK rotating a log) must not abort the
-    // whole run - the rest of the world is still worth keeping.
-    if (!fs.existsSync(entry.file)) continue;
-    zip.addFile(entry.file, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(entry.file);
+    } catch {
+      // Gone between the walk and now - ARK rotating a log of its own. The
+      // rest of the world is still worth keeping.
+      continue;
+    }
+    if (!stat.isFile()) continue;
+
+    /**
+     * addReadStreamLazy with no size, rather than addFile - and the difference
+     * is the whole reason backups used to kill ASMS.
+     *
+     * addFile takes the length from a stat up front and then insists the
+     * stream hand over exactly that many bytes. A running ARK server rewriting
+     * its own saves underneath the backup does not promise anything of the
+     * sort, and the mismatch does not fail one entry: yazl fails the archive,
+     * through an 'error' nobody was listening for. Leaving the size out lets
+     * every file be whatever length it actually turned out to be.
+     *
+     * Lazy, so a large SavedArks folder does not hold one file descriptor open
+     * per file for the length of the run - each opens when its turn comes.
+     */
+    zip.addReadStreamLazy(entry.name, { mtime: stat.mtime, mode: stat.mode }, (cb) => {
+      const stream = fs.createReadStream(entry.file);
+      // yazl attaches no error handler of its own on this path, so a file that
+      // turned unreadable between the walk and its turn would be an unhandled
+      // 'error' - the uncaught exception all over again, one level down.
+      stream.on('error', (err: Error) => fail(err));
+      cb(null, stream);
+    });
   }
   zip.end();
 
   const out = fs.createWriteStream(destFile);
   try {
-    await pipeline(zip.outputStream, out);
+    await Promise.race([failed, pipeline(zip.outputStream, out)]);
   } catch (err) {
     // Never leave a half-written archive behind pretending to be a backup.
     fs.rmSync(destFile, { force: true });
