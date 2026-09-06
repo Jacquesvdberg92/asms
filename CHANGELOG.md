@@ -2,6 +2,58 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [0.3.9] — 2026-09-06
+
+Two reports out of the same test weekend, and the first had been eating the second. Taking a backup
+of a running server could kill ASMS outright — so backups failed, cluster edits failed and "Stop
+all" did nothing, all at once, because there was nothing left to answer with. That is fixed, and so
+is the reason it stayed invisible for so long: several buttons reported success whatever happened.
+
+Underneath it, the bug it was hiding. A survivor walked into a cluster in full gear and came out
+with nothing, and the gear had not stayed behind on the old server either. Nothing in ASMS was set
+wrong, which was the problem: the rules deciding whether a transfer keeps your things are not in
+the INI at all until somebody writes them, and ARK's unwritten answers are built for official
+servers with a support queue. An upload nobody collects inside a day is deleted. That is one
+night's sleep.
+
+### Fixed
+- **Taking a backup could kill ASMS outright.** Zipping a folder a running ARK server is still
+  writing to would fail with `file data stream has unexpected number of bytes`, and yazl reports
+  that by emitting an error on the archive — which nothing was listening for, so it became an
+  uncaught exception and the manager exited. Everything after it, on every device, was
+  "Failed to fetch". Two things were wrong and both are fixed: the archive now streams each file
+  without promising its length in advance, so a save rewritten mid-backup is simply captured at
+  whatever length it turned out to be; and a zip that does fail now fails the backup and says so,
+  instead of taking the process down. Covered by a test that kills the runner without the fix
+- **"Stop all" on a cluster said it worked whether or not it did.** Every failure in the
+  start/stop/restart buttons was swallowed and the toast reported success regardless, so a cluster
+  that ignored the command looked exactly like one that obeyed. Failures are now named, per server
+- **A server could join a cluster but never leave it.** Assigning was a button; undoing it meant
+  knowing the ID lived on each server's own settings page and clearing it there by hand. Every
+  member row now has **Remove**, and the cluster head has **Disband**, both behind a confirm that
+  says what happens to the transfer bank
+- **"Failed to fetch" replaced with something you can act on.** That is the browser's phrase for a
+  request that never got an answer — ASMS stopped, restarting, or unreachable — and it has sent
+  people hunting through their ARK settings for the fault. It now says which of those it is and
+  what to do about it
+- **The exported mod list stopped inventing names.** A mod nobody has named was written out as
+  `Mod 929800,929800`, a fabricated word beside the number it was made from. Unnamed mods now
+  export as just the ID, which is what they are — and still pastes straight back in
+- **Copying the mod list no longer copies the instructions with it.** The two comment lines at the
+  top explain what the file is, which is useful in a file and noise in a Discord message. The
+  Download button still writes them; the clipboard gets the list on its own
+- **A server in a cluster is now set up to actually carry things through it.** Give a server a
+  cluster ID and ASMS writes the transfer rules into `GameUserSettings.ini` before it launches:
+  uploads and downloads open both ways for survivors, items and tames, bank slots raised from ten
+  survivors and fifty item stacks, and a thirty-day expiry in place of ARK's one day. Only keys the
+  file does not already have — a blocked tame download on a PvE map is a decision, and it survives
+- The launch console names every setting it filled in, so the file is never changed quietly
+
+### Added
+- **Survivor slots in the bank** (`MaxTributeCharacters`) under Settings → Transfers. Its two
+  neighbours were already there and it was not, so the one limit that can stop a survivor being
+  banked at all was reachable only through the raw INI editor
+
 ## [0.3.8] — 2026-09-04
 
 Two questions with the same shape: "how do I make my mate an admin?" and "how do I send someone my
