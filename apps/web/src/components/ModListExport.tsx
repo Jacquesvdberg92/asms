@@ -68,6 +68,23 @@ export function ModListExport() {
   const total = flattenGroups(chosen).length;
   const text = useMemo(() => buildModList(chosen, format), [chosen, format]);
 
+  /**
+   * The clipboard gets the same list without the comment header. In a file
+   * those lines say what the file is; pasted into Discord they are two lines
+   * of instructions sitting above the list somebody actually asked for.
+   */
+  const copyText = useMemo(
+    () =>
+      format === 'markdown'
+        ? text
+        : text
+            .split('\n')
+            .filter((line) => !line.trimStart().startsWith('#'))
+            .join('\n')
+            .trim(),
+    [text, format],
+  );
+
   const scopeLabel =
     scope === 'all' ? 'everything' : scope === 'library' ? 'library' : servers.find((s) => s.id === scope)?.name ?? 'server';
 
@@ -180,7 +197,7 @@ export function ModListExport() {
         >
           <Icon.Download size={13} /> Download the list
         </Button>
-        <CopyButton text={text} label="Copy it instead" />
+        <CopyButton text={copyText} label="Copy it instead" />
         <div className="spacer" />
         <span className="card-hint">
           {total} mod{total === 1 ? '' : 's'} · {modListFileName(scopeLabel, format)}

@@ -48,7 +48,9 @@ export function parseModList(text: string): ModEntry[] {
 
 /** The format the "add manually" box accepts, so a list can round trip. */
 export function formatModList(mods: ModEntry[]): string {
-  return mods.map((mod) => [mod.name || `Mod ${mod.id}`, mod.id, mod.url].filter(Boolean).join(',')).join(';\n');
+  // A mod nobody has named has no name. Inventing "Mod 929800" to sit beside
+  // 929800 fills the list with a word that says nothing and reads as a bug.
+  return mods.map((mod) => [mod.name, mod.id, mod.url].filter(Boolean).join(',')).join(';\n');
 }
 
 /**
