@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ark, ensureDir } from '../lib/paths.js';
-import { parseIni, stringifyIni, getValue, setValue, type IniDoc } from '../lib/ini.js';
+import { parseIni, stringifyIni, getValue, setValue, removeKey, type IniDoc } from '../lib/ini.js';
 import { SETTINGS, type SettingDef } from './catalog.js';
 import type { ServerInstance } from '../types.js';
 
@@ -153,7 +153,18 @@ export function syncIdentity(server: ServerInstance): void {
   setValue(doc, 'SessionSettings', 'SessionName', server.sessionName || server.name);
   setValue(doc, 'SessionSettings', 'Port', String(server.port));
   setValue(doc, 'SessionSettings', 'QueryPort', String(server.queryPort));
+  /**
+   * Set when there is one and removed when there is not, which is the whole
+   * point of it being here. Every other field in this function is written
+   * unconditionally, so clearing it in the dashboard clears it in the file.
+   * MultiHome used to be write-only: an address typed once - or one ARK wrote
+   * back itself on shutdown - stayed in the file forever, and no amount of
+   * emptying the box in ASMS would shift it. A server bound to a VPN or a
+   * VirtualBox adapter starts perfectly and then times out for every player,
+   * which is not a fault anybody goes looking for in a config file.
+   */
   if (server.multihome.trim()) setValue(doc, 'SessionSettings', 'MultiHome', server.multihome.trim());
+  else removeKey(doc, 'SessionSettings', 'MultiHome');
 
   setValue(doc, 'ServerSettings', 'ServerPassword', server.serverPassword);
   setValue(doc, 'ServerSettings', 'ServerAdminPassword', server.adminPassword);

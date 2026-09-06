@@ -2,6 +2,17 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
+## [Unreleased]
+
+### Fixed
+- **A multihome address could not be taken back off.** Every other field ASMS owns in
+  `GameUserSettings.ini` is written on every launch, so clearing it in the dashboard clears it in
+  the file. MultiHome was the exception: it was written when set and left alone when empty, so an
+  address typed once — or one ARK wrote back itself on shutdown — stayed in the file forever and no
+  amount of emptying the box would shift it. On a machine with a VPN or a VirtualBox adapter that
+  is a server which starts perfectly, shows as running, and times out for every player trying to
+  join. It is now removed when the box is empty
+
 ## [0.3.9] — 2026-09-06
 
 Two reports out of the same test weekend, and the first had been eating the second. Taking a backup

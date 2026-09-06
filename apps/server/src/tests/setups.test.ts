@@ -571,6 +571,25 @@ test('mods: the PC-only switch reaches the command line', () => {
   assert.ok(buildLaunchPlan(pcOnly).args.includes('-ServerPlatform=PC'));
 });
 
+test('servers: a multihome address emptied in the dashboard is emptied in the file', () => {
+  const server = clusterServer('');
+  /**
+   * The file can carry an address ASMS never put there: ARK rewrites this file
+   * on shutdown, and a machine with a VPN or a VirtualBox adapter has spare
+   * addresses to pick from. Binding to one of those is a server that starts
+   * perfectly and times out for everybody.
+   */
+  writeRaw(server, 'gus', '[SessionSettings]\r\nMultiHome=192.168.56.1\r\n');
+  syncIdentity(server);
+  assert.doesNotMatch(readRaw(server, 'gus'), /MultiHome/, 'an empty box has to reach the file');
+});
+
+test('servers: a multihome address that is set still reaches the file', () => {
+  const server = { ...clusterServer(''), multihome: '192.168.1.188' } as ServerInstance;
+  syncIdentity(server);
+  assert.match(readRaw(server, 'gus'), /MultiHome=192\.168\.1\.188/);
+});
+
 // --------------------------------------------------- cluster transfers
 
 /** A server with everything the transfer path cares about and nothing else. */
