@@ -2,29 +2,53 @@
 
 Notable changes to ASMS. Dates are the day the change landed.
 
-## [Unreleased]
+## [0.3.10] — 2026-09-06
+
+Three faults that each pointed somewhere other than themselves.
+
+A server that started perfectly, reported itself running, and timed out for every player trying to
+join — because of an address in a config file nobody remembered typing. An update that stopped
+before downloading a single byte and blamed the connection, when the connection was fine. And a
+cluster that took one button to join and no button at all to leave.
+
+None of the three were hard to fix once found. All three were hard to find, because in every case
+what ASMS put on screen was true and useless at the same time: a state code, a network error that
+was not a network error, an empty text box. That is the part this release is really about.
 
 ### Fixed
 - **A multihome address could not be taken back off.** Every other field ASMS owns in
   `GameUserSettings.ini` is written on every launch, so clearing it in the dashboard clears it in
-  the file. MultiHome was the exception: it was written when set and left alone when empty, so an
-  address typed once — or one ARK wrote back itself on shutdown — stayed in the file forever and no
-  amount of emptying the box would shift it. On a machine with a VPN or a VirtualBox adapter that
-  is a server which starts perfectly, shows as running, and times out for every player trying to
-  join. It is now removed when the box is empty
-- **A failed update now says what failed.** SteamCMD reports a refused update as
-  `App '2430930' state is 0x6 after update job`, and 0x6 only decodes to "installed, and still needs
-  updating" — the state it gave up in, never the reason. The reason goes to `content_log.txt` beside
-  the SteamCMD binary, which is not a file anybody knows to go and read. ASMS reads it now and adds
-  the cause and the fix: a manifest Steam will not serve for a build that is no longer public, a
-  full disk, a folder it cannot write to, or Steam refusing the anonymous account. Anything it does
-  not recognise gets the line SteamCMD gave up on plus the path to the log, rather than a bare
-  state code
-- **Joining and leaving a cluster is the same two clicks everywhere.** The new-server wizard offered
-  your existing clusters as buttons, with a Standalone one to opt out; a server's own settings page
-  had a bare text box you had to retype an ID into, and no hint that emptying it was how you left.
-  It is the same picker in both places now — every cluster you have, how many servers are already
-  in it, Standalone, and New cluster
+  the file. MultiHome was the one exception — written when set, left alone when empty — so an
+  address entered once could never be withdrawn. Neither could one ASMS never wrote in the first
+  place: ARK rewrites that file itself on shutdown, and a machine with a VPN or a VirtualBox
+  adapter has spare addresses for it to choose from. A server bound to an adapter nobody can reach
+  starts cleanly, shows as running, and times out for every player, which is not a fault anybody
+  thinks to go looking for in a config file they did not write. It is removed now when the box is
+  empty, with a test that fails without the fix
+- **A failed update says what failed.** SteamCMD reports a refused update as
+  `App '2430930' state is 0x6 after update job`, and that was the whole of what reached the console.
+  0x6 decodes to "installed, and still needs updating" — the state it gave up in, and nothing about
+  why. The why is written to `content_log.txt` beside the SteamCMD binary, which is not a file
+  anybody knows exists, let alone thinks to open. ASMS reads it now and adds the cause and the fix:
+  - a manifest Steam will not serve, because the build on disk has stopped being the public one —
+    so there is nothing to patch forward from, and **Verify integrity** is what clears it
+  - the disk being full, named as the disk being full
+  - a folder SteamCMD cannot write into, whether that is a running server, a scanner, or permissions
+  - Steam refusing the anonymous account, which is Steam's side and usually passes
+
+  Anything unrecognised hands over the line SteamCMD actually gave up on, plus the path to the log.
+  Steam wraps that first case as `(No connection)` — the tests pin that ASMS never repeats that and
+  sends somebody off to restart a router that was never the problem
+
+### Changed
+- **Joining and leaving a cluster is the same two clicks from either place.** The new-server wizard
+  already asked properly: here are the clusters you have, here is how many servers are in each,
+  here is Standalone, here is a new one. A server's own settings page asked with a bare text box —
+  so joining an existing cluster meant retyping an ID exactly, which is the classic way to end up
+  with two clusters that look like one, and leaving meant guessing that emptying the box was how
+  you did it. It is one shared picker now, the way the ID field already was, so neither page can
+  drift back into being something you type into. Member counts leave out the server being edited,
+  so a cluster of two reads as one other server rather than two
 
 ## [0.3.9] — 2026-09-06
 
